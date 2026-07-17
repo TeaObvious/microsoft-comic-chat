@@ -1,0 +1,654 @@
+// Ported from v2.5-beta-1-modern/memblst.cpp.
+
+#include "memblst.h"
+
+#include "chat.h"
+#include "chatdoc.h"
+#include "ircproto.h"
+#include "originalassets.h"
+#include "protsupp.h"
+#include "resource.h"
+#include "userinfo.h"
+
+#include <QAction>
+#include <QApplication>
+#include <QContextMenuEvent>
+#include <QEvent>
+#include <QKeyEvent>
+#include <QListWidget>
+#include <QMenu>
+#include <QMessageBox>
+#include <QPainter>
+#include <QPixmap>
+#include <QSet>
+#include <QVBoxLayout>
+
+extern CUserInfo* mousedPui;
+
+namespace {
+constexpr int MEMBER_ICON_SIZE = 40;
+constexpr int MEMBER_STATUS_SIZE = 16;
+constexpr int MEMBER_ICON_GAP = 2;
+
+int GetSort(CUserInfo* pui)
+{
+    if (pui->IsOperator()) {
+        return 0;
+    }
+    if (pui->IsSpectator()) {
+        return 2;
+    }
+    return 1;
+}
+
+int GetStatusImage(CUserInfo* pui)
+{
+    if (!pui) return 0;
+    if (pui->Ignored()) return 3;
+    if (pui->CheckFlag(UF_AWAY)) return 4;
+    if (pui->IsOperator()) return 1;
+    if (pui->IsSpectator()) return 2;
+    return 0;
+}
+
+QIcon GetMemberIcon(CUserInfo* pui, bool iconMode)
+{
+    if (!pui) return {};
+    if (theApp.m_StatusIcons.size() != 5) theApp.InitStatusIcons();
+    const int statusIndex = GetStatusImage(pui);
+    const QIcon status = statusIndex >= 0
+            && statusIndex < theApp.m_StatusIcons.size()
+        ? theApp.m_StatusIcons.at(statusIndex) : QIcon();
+    if (!iconMode) return status;
+
+    const int avatarIndex = AddToImageList(pui);
+    if (avatarIndex < 0 || avatarIndex >= theApp.m_ImageList.size())
+        return status;
+
+    const int width = MEMBER_STATUS_SIZE + MEMBER_ICON_GAP
+        + MEMBER_ICON_SIZE;
+    QPixmap combined(width, MEMBER_ICON_SIZE);
+    combined.fill(Qt::transparent);
+    QPainter painter(&combined);
+    painter.drawPixmap(0, (MEMBER_ICON_SIZE - MEMBER_STATUS_SIZE) / 2,
+                       status.pixmap(MEMBER_STATUS_SIZE,
+                                     MEMBER_STATUS_SIZE));
+    painter.drawPixmap(MEMBER_STATUS_SIZE + MEMBER_ICON_GAP, 0,
+                       theApp.m_ImageList.at(avatarIndex).pixmap(
+                           MEMBER_ICON_SIZE, MEMBER_ICON_SIZE));
+    return QIcon(combined);
+}
+
+void UpdateListItem(QListWidgetItem* item, CUserInfo* pui, bool iconMode)
+{
+    if (!item || !pui) return;
+    item->setText(pui->GetScreenName());
+    item->setIcon(GetMemberIcon(pui, iconMode));
+}
+
+CChatDoc* DocumentForMemberList(const CMemberList* memberList)
+{
+    for (CChatDoc* document : g_docs) {
+        if (document && document->m_memberList == memberList) return document;
+    }
+    return GetChatDoc();
+}
+
+bool HasComicSelection(CChatDoc* document)
+{
+    if (!document) return false;
+    int index = -1;
+    while (CUserInfo* pui = document->GetNextSelectedMember(index)) {
+        if (pui->IsComicUser()) return true;
+    }
+    return false;
+}
+
+bool IgnoreSelectionState(CChatDoc* document, bool* allIgnored)
+{
+    bool enabled = false;
+    bool ignored = true;
+    if (document) {
+        int index = -1;
+        while (CUserInfo* pui = document->GetNextSelectedMember(index)) {
+            if (pui->IsSelf()) continue;
+            enabled = true;
+            if (!pui->Ignored()) {
+                ignored = false;
+                break;
+            }
+        }
+    }
+    if (allIgnored) *allIgnored = enabled && ignored;
+    return enabled;
+}
+
+bool MemberCommandEnabled(const QString& command, CChatDoc* document)
+{
+    if (!document) return false;
+    CUserInfo* single = document->GetSingleSelectedMember();
+    if (command == QLatin1String("ID_MEMBER_GETINFO"))
+        return HasComicSelection(document);
+    if (command == QLatin1String("ID_MEMBER_IGNORE"))
+        return IgnoreSelectionState(document, nullptr);
+    if (command == QLatin1String("ID_ADDTONOTIFICATIONS"))
+        return single && theApp.m_iAutoPage == -1
+            && !single->GetFullName().isEmpty();
+    if (command == QLatin1String("ID_GETIDENTITY")
+        || command == QLatin1String("ID_GET_VERSION")
+        || command == QLatin1String("ID_PING_USER")
+        || command == QLatin1String("ID_GET_LOCALTIME")) {
+        return document->GetConnectionStatus() == CX_INCHANNEL
+            && document->SelectedMemberCount() > 0;
+    }
+    if (command == QLatin1String("ID_SEND_EMAIL"))
+        return single && !single->IsSelf() && single->IsComicUser();
+    if (command == QLatin1String("ID_WHISPERBOX_MLIST"))
+        return single && !single->IsSelf();
+    if (command == QLatin1String("ID_VISIT_HOMEPAGE"))
+        return single && single->IsComicUser();
+    if (command == QLatin1String("ID_MEMBER_GETCHAR")) {
+        if (!g_bCanViewUnrated
+            || document->GetConnectionStatus() != CX_INCHANNEL) {
+            return false;
+        }
+        int index = -1;
+        while (CUserInfo* pui = document->GetNextSelectedMember(index)) {
+            if (!pui->IsAvatarReal()) return true;
+        }
+        return false;
+    }
+    if (command == QLatin1String("ID_ADMINISTRATOR_KICK"))
+        return single && !single->IsSelf();
+    if (command == QLatin1String("ID_ADMIN_BAN")) {
+        const int selected = document->m_memberList
+            ? document->SelectedMemberCount() : 2;
+        return selected < 2 && (!single || !single->IsSelf());
+    }
+    if (command == QLatin1String("ID_MAKEADMIN")
+        || command == QLatin1String("ID_MAKESPEAKER")) {
+        return single && document->m_puiSelf
+            && document->m_puiSelf->IsOperator()
+            && document->GetConnectionStatus() == CX_INCHANNEL;
+    }
+    if (command == QLatin1String("ID_MAKESPECTATOR")) {
+        return single && document->m_puiSelf
+            && document->m_puiSelf->IsOperator()
+            && document->GetConnectionStatus() == CX_INCHANNEL
+            && document->m_proto
+            && (document->m_proto->m_dwModes & CM_MODERATED);
+    }
+    if (command == QLatin1String("ID_VIEW_ICON"))
+        return document->m_bComicView;
+    if (command == QLatin1String("ID_VIEW_LIST"))
+        return document->m_bComicView
+            && document->GetConnectionStatus() == CX_INCHANNEL;
+    if (command == QLatin1String("ID_DEFINE_MACRO"))
+        return document->GetConnectionStatus() != CX_CONNECTING;
+    if (command.startsWith(QLatin1String("ID_MACRO_A"))) {
+        bool valid = false;
+        const INT macro = command.mid(10).toInt(&valid);
+        return valid && macro >= 0 && macro < NMACROS
+            && document->OnUpdateMacro(ID_MACRO_A0 + macro);
+    }
+    // filesend.* and the CB32/NetMeeting path are not present yet. Keep the
+    // original resource entries visible without inventing an implementation.
+    if (command == QLatin1String("ID_SEND_FILE")
+        || command == QLatin1String("ID_START_NETMEETING")) {
+        return false;
+    }
+    return false;
+}
+
+void ExecuteMemberCommand(const QString& command, CChatDoc* document)
+{
+    if (!document || !MemberCommandEnabled(command, document)) return;
+    if (command == QLatin1String("ID_MEMBER_GETINFO"))
+        document->OnMemberGetinfo();
+    else if (command == QLatin1String("ID_MEMBER_IGNORE"))
+        document->OnMemberIgnore();
+    else if (command == QLatin1String("ID_ADDTONOTIFICATIONS"))
+        document->OnAddToNotifs();
+    else if (command == QLatin1String("ID_GETIDENTITY"))
+        document->OnGetidentity();
+    else if (command == QLatin1String("ID_MEMBER_GETCHAR"))
+        document->OnGetComicCharacter();
+    else if (command == QLatin1String("ID_GET_VERSION"))
+        document->OnGetVersion();
+    else if (command == QLatin1String("ID_PING_USER"))
+        document->OnPingUser();
+    else if (command == QLatin1String("ID_GET_LOCALTIME"))
+        document->OnGetLocaltime();
+    else if (command == QLatin1String("ID_WHISPERBOX_MLIST"))
+        document->OnWhisperboxMlist();
+    else if (command == QLatin1String("ID_SEND_EMAIL"))
+        document->OnSendEmail();
+    else if (command == QLatin1String("ID_VISIT_HOMEPAGE"))
+        document->OnVisitHomepage();
+    else if (command == QLatin1String("ID_ADMINISTRATOR_KICK"))
+        document->OnAdministratorKick();
+    else if (command == QLatin1String("ID_ADMIN_BAN"))
+        document->OnAdminBan();
+    else if (command == QLatin1String("ID_MAKEADMIN"))
+        document->OnMakeadmin();
+    else if (command == QLatin1String("ID_MAKESPEAKER"))
+        document->OnMakespeaker();
+    else if (command == QLatin1String("ID_MAKESPECTATOR"))
+        document->OnMakespectator();
+    else if (command == QLatin1String("ID_VIEW_LIST"))
+        document->OnViewListAux();
+    else if (command == QLatin1String("ID_VIEW_ICON"))
+        document->OnViewIcon();
+    else if (command == QLatin1String("ID_DEFINE_MACRO"))
+        theApp.OnDefineMacro();
+    else if (command.startsWith(QLatin1String("ID_MACRO_A"))) {
+        bool valid = false;
+        const INT macro = command.mid(10).toInt(&valid);
+        if (valid && macro >= 0 && macro < NMACROS)
+            document->OnMacro(ID_MACRO_A0 + macro);
+    }
+}
+
+void ConfigureMemberAction(QAction* action, const QString& command,
+                           CChatDoc* document, QMenu& menu)
+{
+    action->setData(command);
+    action->setStatusTip(originalResourceString(command)
+                             .section(QLatin1Char('\n'), 0, 0));
+    const bool enabled = MemberCommandEnabled(command, document);
+    action->setEnabled(enabled);
+    if (command == QLatin1String("ID_MEMBER_IGNORE")) {
+        bool allIgnored = false;
+        IgnoreSelectionState(document, &allIgnored);
+        action->setCheckable(true);
+        action->setChecked(allIgnored);
+    } else if (command == QLatin1String("ID_VIEW_ICON")) {
+        action->setCheckable(true);
+        action->setChecked(document && document->m_bIconMembers);
+    } else if (command == QLatin1String("ID_VIEW_LIST")) {
+        action->setCheckable(true);
+        action->setChecked(!document || !document->m_bIconMembers);
+    } else if (command == QLatin1String("ID_MAKEADMIN")) {
+        action->setCheckable(true);
+        action->setChecked(document && document->GetSingleSelectedMember()
+                           && document->GetSingleSelectedMember()->IsOperator());
+    } else if (command == QLatin1String("ID_MAKESPEAKER")) {
+        CUserInfo* pui = document
+            ? document->GetSingleSelectedMember() : nullptr;
+        action->setCheckable(true);
+        action->setChecked(pui && pui->IsSpeaker()
+                           && !pui->IsOperator());
+    } else if (command == QLatin1String("ID_MAKESPECTATOR")) {
+        CUserInfo* pui = document
+            ? document->GetSingleSelectedMember() : nullptr;
+        action->setCheckable(true);
+        action->setChecked(pui && pui->IsSpectator());
+    }
+    if (enabled) {
+        QObject::connect(action, &QAction::triggered, &menu,
+                         [command, document] {
+                             ExecuteMemberCommand(command, document);
+                         });
+    }
+}
+
+void AppendMemberMenu(QMenu& menu, const QList<OriginalMenuItem>& items,
+                      CChatDoc* document)
+{
+    for (const OriginalMenuItem& item : items) {
+        if (item.type == OriginalMenuItemType::Separator) {
+            menu.addSeparator();
+            continue;
+        }
+        if (item.type == OriginalMenuItemType::Popup) {
+            QMenu* popup = menu.addMenu(item.text);
+            AppendMemberMenu(*popup, item.children, document);
+            continue;
+        }
+
+        QAction* action = menu.addAction(item.text);
+        ConfigureMemberAction(action, item.commandIdentifier, document, menu);
+    }
+}
+
+void LoadMemberMenu(QMenu& menu, const QString& resource,
+                    CChatDoc* document)
+{
+    const QList<OriginalMenuItem> roots = originalMenuResource(resource);
+    if (roots.size() == 1
+        && roots.first().type == OriginalMenuItemType::Popup) {
+        AppendMemberMenu(menu, roots.first().children, document);
+    } else {
+        AppendMemberMenu(menu, roots, document);
+    }
+}
+}
+
+void AddMacroMenu(QMenu& contextMenu)
+{
+    CChatDoc* document = GetChatDoc();
+    if (!document) return;
+
+    QMenu* macroMenu = nullptr;
+    QList<QMenu*> pending{&contextMenu};
+    while (!pending.isEmpty() && !macroMenu) {
+        QMenu* candidate = pending.takeFirst();
+        for (QAction* action : candidate->actions()) {
+            if (action->menu()) pending.append(action->menu());
+            if (action->data().toString() == QLatin1String("IDD_BAN")) {
+                macroMenu = candidate;
+                break;
+            }
+        }
+    }
+    if (!macroMenu) return;
+
+    macroMenu->clear();
+    QAction* define = macroMenu->addAction(originalMenuItemText(
+        QStringLiteral("ID_DEFINE_MACRO")));
+    ConfigureMemberAction(define, QStringLiteral("ID_DEFINE_MACRO"),
+                          document, *macroMenu);
+
+    BOOL macroPresent = FALSE;
+    for (INT macro = 0; macro < NMACROS; ++macro) {
+        if (!theApp.m_macros[macro].m_bDefined) continue;
+        if (!macroPresent) {
+            macroMenu->addSeparator();
+            macroPresent = TRUE;
+        }
+        const QString command = QStringLiteral("ID_MACRO_A%1").arg(macro);
+        QAction* action = macroMenu->addAction(QStringLiteral("%1\tAlt+%2")
+            .arg(theApp.m_macros[macro].m_strName).arg(macro));
+        ConfigureMemberAction(action, command, document, *macroMenu);
+    }
+}
+
+void ShowMemberContext(int x, int y)
+{
+    CChatDoc* document = GetChatDoc();
+    if (!mousedPui || !document) return;
+    QMenu menu;
+    const bool administrator = g_puiSelf && g_puiSelf->IsOperator();
+    LoadMemberMenu(menu,
+                   administrator ? QStringLiteral("IDR_MEMBERADMIN")
+                                 : QStringLiteral("IDR_IRC_MEMBER"),
+                   document);
+    document->UpdateComicCharacterMenu(&menu);
+    AddMacroMenu(menu);
+    if (!menu.actions().isEmpty()) menu.exec(QPoint(x, y));
+}
+
+CMemberList::CMemberList(QWidget* parent)
+    : QWidget(parent)
+    , m_list(new QListWidget(this))
+{
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->addWidget(m_list);
+    m_list->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    m_list->viewport()->installEventFilter(this);
+    connect(m_list, &QListWidget::itemDoubleClicked, this,
+            [this](QListWidgetItem* item) {
+        CChatDoc* document = DocumentForMemberList(this);
+        auto* pui = item ? static_cast<CUserInfo*>(
+            item->data(Qt::UserRole).value<void*>()) : nullptr;
+        if (!document || !document->m_proto || !pui) return;
+        if (pui->IsComicUser()) {
+            document->m_proto->ChatGetInfo(pui);
+        } else {
+            QString message = originalResourceString(
+                QStringLiteral("IDS_NOTCOMICSUSER"));
+            message.replace(QStringLiteral("%1"), pui->GetScreenName());
+            QMessageBox::information(this, QString(), message);
+        }
+    });
+}
+
+void CMemberList::AddUser(CUserInfo* pui)
+{
+    if (!pui) {
+        return;
+    }
+    for (int i = 0; i < m_list->count(); ++i) {
+        if (m_list->item(i)->data(Qt::UserRole).value<void*>() == pui) {
+            UpdateListItem(m_list->item(i), pui, m_iconMode);
+            Sort();
+            return;
+        }
+    }
+    auto* item = new QListWidgetItem(pui->GetScreenName());
+    item->setData(Qt::UserRole, QVariant::fromValue(static_cast<void*>(pui)));
+    UpdateListItem(item, pui, m_iconMode);
+    m_list->addItem(item);
+    Sort();
+}
+
+void CMemberList::RemoveUser(CUserInfo* pui)
+{
+    if (!pui) return;
+    for (int i = 0; i < m_list->count(); ++i) {
+        if (m_list->item(i)->data(Qt::UserRole).value<void*>() == pui) {
+            delete m_list->takeItem(i);
+            return;
+        }
+    }
+}
+
+void CMemberList::Clear()
+{
+    m_list->clear();
+}
+
+void CMemberList::Sort()
+{
+    QSet<CUserInfo*> selected;
+    for (QListWidgetItem* item : m_list->selectedItems()) {
+        selected.insert(static_cast<CUserInfo*>(
+            item->data(Qt::UserRole).value<void*>()));
+    }
+    CUserInfo* current = currentUser();
+    QList<QListWidgetItem*> items;
+    while (m_list->count() > 0) {
+        items.append(m_list->takeItem(0));
+    }
+    std::stable_sort(items.begin(), items.end(), [](QListWidgetItem* a, QListWidgetItem* b) {
+        auto* pa = static_cast<CUserInfo*>(a->data(Qt::UserRole).value<void*>());
+        auto* pb = static_cast<CUserInfo*>(b->data(Qt::UserRole).value<void*>());
+        if (!pa || !pb) {
+            return a->text() < b->text();
+        }
+        const int sa = GetSort(pa);
+        const int sb = GetSort(pb);
+        if (sa != sb) {
+            return sa < sb;
+        }
+        return pa->GetScreenName().compare(pb->GetScreenName(), Qt::CaseInsensitive) < 0;
+    });
+    for (QListWidgetItem* item : items) {
+        auto* pui = static_cast<CUserInfo*>(item->data(Qt::UserRole).value<void*>());
+        if (pui) {
+            UpdateListItem(item, pui, m_iconMode);
+        }
+        m_list->addItem(item);
+        item->setSelected(selected.contains(pui));
+        if (pui == current)
+            m_list->setCurrentItem(item, QItemSelectionModel::NoUpdate);
+    }
+}
+
+void CMemberList::SetIconMode(bool iconMode)
+{
+    m_iconMode = iconMode;
+    m_list->setViewMode(iconMode ? QListView::IconMode : QListView::ListMode);
+    m_list->setIconSize(iconMode
+        ? QSize(MEMBER_STATUS_SIZE + MEMBER_ICON_GAP + MEMBER_ICON_SIZE,
+                MEMBER_ICON_SIZE)
+        : QSize(MEMBER_STATUS_SIZE, MEMBER_STATUS_SIZE));
+    for (int index = 0; index < m_list->count(); ++index) {
+        QListWidgetItem* item = m_list->item(index);
+        auto* pui = static_cast<CUserInfo*>(
+            item->data(Qt::UserRole).value<void*>());
+        UpdateListItem(item, pui, m_iconMode);
+    }
+}
+
+int CMemberList::count() const
+{
+    return m_list->count();
+}
+
+CUserInfo* CMemberList::currentUser() const
+{
+    QListWidgetItem* item = m_list->currentItem();
+    return item ? static_cast<CUserInfo*>(item->data(Qt::UserRole).value<void*>()) : nullptr;
+}
+
+QList<CUserInfo*> CMemberList::selectedUsers() const
+{
+    QList<CUserInfo*> selections;
+    const QList<QListWidgetItem*> selected = m_list->selectedItems();
+    for (QListWidgetItem* item : selected) {
+        auto* pui = static_cast<CUserInfo*>(item->data(Qt::UserRole).value<void*>());
+        if (pui && pui != g_puiSelf) {
+            selections.append(pui);
+        }
+    }
+    return selections;
+}
+
+CUserInfo* CMemberList::GetNextSelectedMember(int& index) const
+{
+    for (++index; index < m_list->count(); ++index) {
+        QListWidgetItem* item = m_list->item(index);
+        if (item && item->isSelected()) {
+            return static_cast<CUserInfo*>(
+                item->data(Qt::UserRole).value<void*>());
+        }
+    }
+    return nullptr;
+}
+
+int CMemberList::SelectedMemberCount() const
+{
+    return m_list->selectedItems().size();
+}
+
+QWidget* CMemberList::FocusWidget() const
+{
+    return m_list;
+}
+
+void CMemberList::EnsureFocusItem()
+{
+    if (m_list->currentRow() < 0 && m_list->count() > 0) m_list->setCurrentRow(0);
+}
+
+void CMemberList::MakeVisible(CUserInfo* pui)
+{
+    if (!pui) return;
+    for (int index = 0; index < m_list->count(); ++index) {
+        QListWidgetItem* item = m_list->item(index);
+        if (item && item->data(Qt::UserRole).value<void*>() == pui) {
+            m_list->scrollToItem(item, QAbstractItemView::EnsureVisible);
+            return;
+        }
+    }
+}
+
+void CMemberList::OnContextMenu(const QPoint& listPoint,
+                                const QPoint& globalPoint, BOOL keyboard)
+{
+    CChatDoc* document = DocumentForMemberList(this);
+    if (!document) return;
+    if (keyboard && SelectedMemberCount() > 1) {
+        QApplication::beep();
+        return;
+    }
+
+    QListWidgetItem* item = nullptr;
+    if (keyboard) {
+        for (INT index = 0; index < m_list->count(); ++index) {
+            if (m_list->item(index)->isSelected()) {
+                item = m_list->item(index);
+                break;
+            }
+        }
+    } else {
+        item = m_list->itemAt(listPoint);
+    }
+    QMenu menu(this);
+    if (!item) {
+        if (!document->m_bComicView) return;
+        LoadMemberMenu(menu, QStringLiteral("IDR_MEMBERCONTEXT"), document);
+    } else {
+        mousedPui = static_cast<CUserInfo*>(
+            item->data(Qt::UserRole).value<void*>());
+        ShowMemberContext(globalPoint.x(), globalPoint.y());
+        return;
+    }
+    if (!menu.actions().isEmpty()) menu.exec(globalPoint);
+}
+
+void CMemberList::contextMenuEvent(QContextMenuEvent* event)
+{
+    const BOOL keyboard = event->reason() == QContextMenuEvent::Keyboard;
+    const QPoint globalPoint = keyboard
+        ? mapToGlobal(rect().center()) : event->globalPos();
+    const QPoint listPoint = m_list->viewport()->mapFromGlobal(globalPoint);
+    OnContextMenu(listPoint, globalPoint, keyboard);
+    event->accept();
+}
+
+bool CMemberList::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == m_list->viewport()
+        && event->type() == QEvent::ContextMenu) {
+        auto* contextEvent = static_cast<QContextMenuEvent*>(event);
+        const BOOL keyboard = contextEvent->reason()
+            == QContextMenuEvent::Keyboard;
+        const QPoint globalPoint = keyboard
+            ? mapToGlobal(rect().center()) : contextEvent->globalPos();
+        OnContextMenu(contextEvent->pos(), globalPoint, keyboard);
+        return true;
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void ForwardToSayWnd(unsigned int character)
+{
+    CChatDoc* document = GetChatDoc();
+    if (!document || !document->m_sayWnd) return;
+    document->SetFocusToSayWnd();
+    QWidget* focus = QApplication::focusWidget();
+    if (!focus || character > 0xffffU) return;
+    const QString text(QChar(static_cast<ushort>(character)));
+    QKeyEvent keyEvent(QEvent::KeyPress, 0, Qt::NoModifier, text);
+    QApplication::sendEvent(focus, &keyEvent);
+}
+
+void GetSelectedPuis(QList<CUserInfo*>& selections)
+{
+    selections.clear();
+    CChatDoc* document = GetChatDoc();
+    if (document && document->m_memberList) {
+        selections = document->m_memberList->selectedUsers();
+    }
+}
+
+void UpdateSpectators(CChatDoc* doc, BOOL moderated)
+{
+    if (!doc || !doc->m_memberList || !doc->m_memberList->m_list) return;
+    QListWidget* members = doc->m_memberList->m_list;
+    QList<CUserInfo*> changed;
+    for (int index = 0; index < members->count(); ++index) {
+        QListWidgetItem* item = members->item(index);
+        auto* pui = static_cast<CUserInfo*>(
+            item->data(Qt::UserRole).value<void*>());
+        if (!pui) continue;
+        pui->SetFlag(UF_SPECTATOR,
+                     !pui->IsOperator() && moderated
+                         && !pui->CheckFlag(UF_HASVOICE));
+        changed.append(pui);
+    }
+    for (CUserInfo* pui : changed) doc->m_memberList->AddUser(pui);
+}
