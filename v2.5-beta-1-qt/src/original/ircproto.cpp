@@ -7,6 +7,7 @@
 #include "ccommon.h"
 #include "format.h"
 #include "histent.h"
+#include "intl.h"
 #include "ircsock.h"
 #include "notif.h"
 #include "originalassets.h"
@@ -33,7 +34,36 @@ constexpr short kHeresInfoLength = 12;
 
 QString maybeString(void* pvData)
 {
-    return pvData ? QString::fromUtf8(static_cast<const char*>(pvData)) : QString();
+    return pvData ? QString::fromLatin1(static_cast<const char*>(pvData))
+                  : QString();
+}
+
+QByteArray sourceCodePageBytes(QStringView text, UINT codePage = GetACP())
+{
+    QByteArray bytes;
+    if (!bWideToCodePage(text, codePage, &bytes)) {
+        return text.toString().toLatin1();
+    }
+    return bytes;
+}
+
+QString sourceCodePageText(const QByteArray& bytes, UINT codePage = GetACP())
+{
+    QString text;
+    if (!bCodePageToWide(bytes, codePage, &text)) {
+        return QString::fromLatin1(bytes);
+    }
+    return text;
+}
+
+QString sourceCodePageRoundTrip(QStringView text, UINT codePage = GetACP())
+{
+    return sourceCodePageText(sourceCodePageBytes(text, codePage), codePage);
+}
+
+QString sourceCodePageCarrier(QStringView text, UINT codePage = GetACP())
+{
+    return QString::fromLatin1(sourceCodePageBytes(text, codePage));
 }
 
 bool originalSpace(char ch)
@@ -46,6 +76,10 @@ const char* nextEncodedCharacter(int encoding, const char* position,
                                  const char* end)
 {
     if (position >= end) return end;
+    if (encoding == ENC_DBCS) {
+        const char* next = CharNextEx(GetACP(), position);
+        return qMin(next, end);
+    }
     if (encoding != ENC_UTF8) return position + 1;
     return qMin(SzNextUTF8Char(position), end);
 }
@@ -138,22 +172,23 @@ bool bExtendedNickname(const QString& nickname)
 QString EncodeNick(const QString& nickname, bool escapeWildcards)
 {
     QByteArray encoded;
-    if (!bConvertWideStringToUTF8(QStringView(nickname), 0, &encoded, nullptr,
+    const QString sourceText = sourceCodePageRoundTrip(QStringView(nickname));
+    if (!bConvertWideStringToUTF8(QStringView(sourceText), 0, &encoded, nullptr,
                                   TRUE, FALSE, TRUE, escapeWildcards)) {
         return nickname;
     }
-    return QString::fromUtf8(encoded);
+    return QString::fromLatin1(encoded);
 }
 
 QString DecodeNick(const QString& nickname)
 {
     if (!nickname.startsWith(QLatin1Char('\''))) return nickname;
     QString decoded;
-    if (!bConvertUTF8StringToWide(nickname.toUtf8(), 0, &decoded, nullptr,
+    if (!bConvertUTF8StringToWide(nickname.toLatin1(), 0, &decoded, nullptr,
                                   TRUE, FALSE, TRUE)) {
         return nickname;
     }
-    return decoded;
+    return sourceCodePageRoundTrip(QStringView(decoded));
 }
 
 QString DecodeNickForScreen(const QString& nickname)
@@ -175,12 +210,9 @@ QString EncodeChan(const QString& channel)
     }
     if (channel.startsWith(QLatin1Char('#'))
         || channel.startsWith(QLatin1Char('&'))) {
-        if (theApp.m_charSet == ANSI_CHARSET) return channel;
-        QByteArray local;
-        if (!bWideToCharacterSet(QStringView(channel), theApp.m_charSet,
-                                 &local)) {
-            return channel;
-        }
+        const QByteArray local = sourceCodePageBytes(QStringView(channel));
+        if (theApp.m_charSet == ANSI_CHARSET)
+            return QString::fromLatin1(local);
         QByteArray converted;
         BOOL changed = FALSE;
         if (!bConvertString(FALSE, theApp.m_charSet, local, &converted,
@@ -190,11 +222,12 @@ QString EncodeChan(const QString& channel)
         return QString::fromLatin1(converted);
     }
     QByteArray encoded;
-    if (!bConvertWideStringToUTF8(QStringView(channel), 0, &encoded, nullptr,
+    const QString sourceText = sourceCodePageRoundTrip(QStringView(channel));
+    if (!bConvertWideStringToUTF8(QStringView(sourceText), 0, &encoded, nullptr,
                                   FALSE, TRUE, TRUE, FALSE)) {
         return channel;
     }
-    return QString::fromUtf8(encoded);
+    return QString::fromLatin1(encoded);
 }
 
 QString DecodeChan(const QString& channel, bool forceDbcs)
@@ -206,74 +239,64 @@ QString DecodeChan(const QString& channel, bool forceDbcs)
     }
 
     const QChar firstCharacter = channel.front();
-    QString decoded = channel;
+    QByteArray local;
+    UINT localCodePage = GetACP();
+    QString decoded;
     int prefixLength = 0;
     if (firstCharacter == QLatin1Char('%')) {
-        if (!bConvertUTF8StringToWide(channel.toUtf8(), 0, &decoded,
+        if (!bConvertUTF8StringToWide(channel.toLatin1(), 0, &decoded,
                                       nullptr, FALSE, TRUE, TRUE)) {
-            return channel;
+            return sourceCodePageText(channel.toLatin1());
         }
-        if (decoded.startsWith(QLatin1Char('%')) && decoded.size() > 1) {
+        localCodePage = forceDbcs ? 1252U : GetACP();
+        local = sourceCodePageBytes(QStringView(decoded), localCodePage);
+        if (local.size() > 1 && local.front() == '%') {
             prefixLength = 2;
         }
+    } else {
+        local = channel.toLatin1();
     }
 
     if (firstCharacter == QLatin1Char('#')
         || firstCharacter == QLatin1Char('&') || forceDbcs) {
-        if (theApp.m_charSet == ANSI_CHARSET) {
-            return decoded.mid(prefixLength);
-        }
-        QByteArray local;
-        if (firstCharacter == QLatin1Char('%')) {
-            if (!bWideToCharacterSet(QStringView(decoded), theApp.m_charSet,
-                                     &local)) {
-                return decoded.mid(prefixLength);
+        if (theApp.m_charSet != ANSI_CHARSET) {
+            QByteArray converted;
+            BOOL changed = FALSE;
+            if (!bConvertString(TRUE, theApp.m_charSet, local, &converted,
+                                &changed)) {
+                return sourceCodePageText(local, localCodePage).mid(prefixLength);
             }
-        } else {
-            local = channel.toLatin1();
+            local = converted;
+            localCodePage = GetACP();
         }
-        QByteArray converted;
-        BOOL changed = FALSE;
-        if (!bConvertString(TRUE, theApp.m_charSet, local, &converted,
-                            &changed)) {
-            return decoded.mid(prefixLength);
-        }
-        QString wide;
-        if (!bCharacterSetToWide(converted, theApp.m_charSet, &wide)) {
-            return decoded.mid(prefixLength);
-        }
-        decoded = wide;
     }
 
-    return decoded.mid(prefixLength);
+    return sourceCodePageText(local, localCodePage).mid(prefixLength);
 }
 
 QString DecodeString(const QByteArray& string, int encoding)
 {
     if (string.isEmpty()) return QString();
     if (encoding == ENC_DBCS) {
-        if (theApp.m_charSet == ANSI_CHARSET) {
-            return QString::fromLatin1(string);
+        QByteArray local = string;
+        if (theApp.m_charSet != ANSI_CHARSET) {
+            QByteArray converted;
+            BOOL changed = FALSE;
+            if (!bConvertString(TRUE, theApp.m_charSet, string, &converted,
+                                &changed)) {
+                return sourceCodePageText(string);
+            }
+            local = converted;
         }
-        QByteArray converted;
-        BOOL changed = FALSE;
-        if (!bConvertString(TRUE, theApp.m_charSet, string, &converted,
-                            &changed)) {
-            return QString::fromLatin1(string);
-        }
-        QString wide;
-        if (!bCharacterSetToWide(converted, theApp.m_charSet, &wide)) {
-            return QString::fromLatin1(string);
-        }
-        return wide;
+        return sourceCodePageText(local);
     }
 
     QString decoded;
     if (!bConvertUTF8StringToWide(string, 0, &decoded, nullptr,
                                   FALSE, FALSE, FALSE)) {
-        return QString::fromLatin1(string);
+        return sourceCodePageText(string);
     }
-    return decoded;
+    return sourceCodePageRoundTrip(QStringView(decoded));
 }
 
 void GetModeChars(DWORD flags, char* buffer)
@@ -463,7 +486,12 @@ void CIrcProto::ChatJoinAux(CRoomInfo& enterInfo)
     if (enterInfo.m_strPassword.isEmpty()) {
         SendMessageText(QStringLiteral("JOIN %1\r\n").arg(enterInfo.m_strChannel));
     } else {
-        SendMessageText(QStringLiteral("JOIN %1 %2\r\n").arg(enterInfo.m_strChannel, enterInfo.m_strPassword));
+        const int encoding = enterInfo.m_strChannel.startsWith(QLatin1Char('#'))
+                || enterInfo.m_strChannel.startsWith(QLatin1Char('&'))
+            ? ENC_DBCS : ENC_UTF8;
+        SendMessageText(QStringLiteral("JOIN %1 %2\r\n").arg(
+            enterInfo.m_strChannel,
+            EncodeString(enterInfo.m_strPassword, encoding)));
     }
 }
 
@@ -484,7 +512,11 @@ void CIrcProto::ChatCreateAux(CRoomInfo& enterInfo)
             + QString::number(enterInfo.m_dwMaxUsers);
     }
     if (!enterInfo.m_strPassword.isEmpty()) {
-        parameters += QLatin1Char(' ') + enterInfo.m_strPassword;
+        const int encoding = enterInfo.m_strChannel.startsWith(QLatin1Char('#'))
+                || enterInfo.m_strChannel.startsWith(QLatin1Char('&'))
+            ? ENC_DBCS : ENC_UTF8;
+        parameters += QLatin1Char(' ')
+            + EncodeString(enterInfo.m_strPassword, encoding);
     }
     SendMessageText(QStringLiteral("CREATE %1%2\r\n")
                         .arg(enterInfo.m_strChannel, parameters));
@@ -531,18 +563,21 @@ bool CIrcProto::bChatSendToTarget(const QString& addressee, const QString& annot
     if (target.isEmpty()) return false;
 
     const int encoding = addressee.isEmpty() ? EncodingType() : ENC_DBCS;
-    const QByteArray targetBytes = target.toUtf8();
+    const QByteArray targetBytes = target.toLatin1();
     const QByteArray annotationBytes = annotations.toLatin1();
     const QByteArray messageBytes = lowLevelQuote(
         EncodeStringBytes(message, encoding));
     const QByteArray command = asNotice ? QByteArrayLiteral("NOTICE")
                                         : QByteArrayLiteral("PRIVMSG");
 
-    int receivingPrefixLength = 2 + GetMyNickName().toUtf8().size();
+    int receivingPrefixLength = 2
+        + sourceCodePageBytes(QStringView(GetMyNickName())).size();
     if (theApp.m_nMyIdentLength) {
         receivingPrefixLength += theApp.m_nMyIdentLength;
     } else {
-        receivingPrefixLength += QByteArray(GetMyUserName()).size() + 32;
+        GetMyUserName();
+        receivingPrefixLength += sourceCodePageBytes(
+            QStringView(theApp.m_strUserName)).size() + 32;
     }
     const int maximum = m_pSock ? m_pSock->m_nMaxMsgLength : g_nDefaultIOBuff;
     const int receivedLength = 12 + targetBytes.size() + annotationBytes.size()
@@ -595,6 +630,7 @@ bool CIrcProto::bChatSendToTarget(const QString& addressee, const QString& annot
     QByteArray body = messageBytes.mid(prefixLength);
     WORD formatBegin = 0;
     unsigned short chunkModes = modes;
+    const bool onlySendOneChunk = encoding == ENC_DBCS && GetACP() == 932;
     do {
         char formatBeginBytes[11]{};
         WORD formatEnd = 0;
@@ -631,7 +667,7 @@ bool CIrcProto::bChatSendToTarget(const QString& addressee, const QString& annot
             prefixLength = kActionLength + 1;
             prefix = QByteArray(kActionId, kActionLength) + ' ';
         }
-    } while (!body.isEmpty());
+    } while (!body.isEmpty() && !onlySendOneChunk);
     return true;
 }
 
@@ -645,8 +681,7 @@ QString CIrcProto::EncodeString(const QString& string, int encoding) const
 {
     const QByteArray encoded = EncodeStringBytes(string, encoding);
     if (encoding == ENC_CHANNEL) encoding = EncodingType();
-    return encoding == ENC_DBCS ? QString::fromLatin1(encoded)
-                                : QString::fromUtf8(encoded);
+    return QString::fromLatin1(encoded);
 }
 
 QByteArray CIrcProto::EncodeStringBytes(const QString& string,
@@ -654,11 +689,8 @@ QByteArray CIrcProto::EncodeStringBytes(const QString& string,
 {
     if (encoding == ENC_CHANNEL) encoding = EncodingType();
     if (encoding == ENC_DBCS) {
-        QByteArray local;
-        if (!bWideToCharacterSet(QStringView(string), theApp.m_charSet,
-                                 &local)) {
-            return string.toLocal8Bit();
-        }
+        const QByteArray local = sourceCodePageBytes(QStringView(string));
+        if (theApp.m_charSet == ANSI_CHARSET) return local;
         QByteArray converted;
         BOOL changed = FALSE;
         if (!bConvertString(FALSE, theApp.m_charSet, local, &converted,
@@ -668,9 +700,10 @@ QByteArray CIrcProto::EncodeStringBytes(const QString& string,
         return converted;
     }
     QByteArray encoded;
-    if (!bConvertWideStringToUTF8(QStringView(string), 0, &encoded, nullptr,
+    const QString sourceText = sourceCodePageRoundTrip(QStringView(string));
+    if (!bConvertWideStringToUTF8(QStringView(sourceText), 0, &encoded, nullptr,
                                   FALSE, FALSE, FALSE, FALSE)) {
-        return string.toLocal8Bit();
+        return sourceCodePageBytes(QStringView(string));
     }
     return encoded;
 }
@@ -731,10 +764,9 @@ QString CIrcProto::StrEncodeCommandParam(DWORD argumentType, int* encoding,
                 nickPortion = parameter.mid(begin, bang - begin);
             }
         }
-        if (IsIRCX() && bExtendedNickname(nickPortion)) {
-            nickname = EncodeNick(nickname);
-        }
-        return nickname;
+        if (IsIRCX() && bExtendedNickname(nickPortion))
+            return EncodeNick(nickname);
+        return QString::fromLatin1(sourceCodePageBytes(QStringView(nickname)));
     }
 
     default:
@@ -760,15 +792,19 @@ bool CIrcProto::ChatChangeNick(const QString& newNick)
     if (newNick.isEmpty()) {
         return false;
     }
-    SendMessageText(QStringLiteral("NICK %1\r\n").arg(newNick));
+    const QString wireNickname = IsIRCX() && bExtendedNickname(newNick)
+        ? EncodeNick(newNick) : sourceCodePageCarrier(QStringView(newNick));
+    SendMessageText(QStringLiteral("NICK %1\r\n").arg(wireNickname));
     return true;
 }
 
 bool CIrcProto::ChatKickUser(const QString& nickname,
                              const QString& reason)
 {
+    const QString wireReason = reason.isEmpty()
+        ? QString() : EncodeString(reason);
     SendMessageText(QStringLiteral("KICK %1 %2 :%3\r\n")
-                        .arg(m_strChannel, nickname, reason));
+                        .arg(m_strChannel, nickname, wireReason));
     return true;
 }
 
@@ -832,7 +868,7 @@ void CIrcProto::ChatSetNick(const QString& nickname)
 
 bool CIrcProto::ChatSetTopic(const QString& topic)
 {
-    const QByteArray encoded = topic.toUtf8();
+    const QByteArray encoded = EncodeStringBytes(topic);
     return bExecuteQuery(qpSetTopic, ctTopic, dtMax,
                          const_cast<char*>(encoded.constData()),
                          m_strChannel, QString());
@@ -864,7 +900,7 @@ bool CIrcProto::ChatSetMode(DWORD newMode, DWORD newMaxUsers,
     GetModeChars(newUnsets, modeBuffer);
     if (*modeBuffer) {
         const QString key = (newUnsets & CM_CHANNELKEY)
-            ? m_strPassword : QString();
+            ? EncodeString(m_strPassword) : QString();
         SendMessageText(QStringLiteral("MODE %1 -%2 %3\r\n")
                             .arg(m_strChannel,
                                  QString::fromLatin1(modeBuffer), key));
@@ -873,7 +909,7 @@ bool CIrcProto::ChatSetMode(DWORD newMode, DWORD newMaxUsers,
     GetModeChars(newSets, modeBuffer);
     if (*modeBuffer) {
         const QString key = (newSets & CM_CHANNELKEY)
-            ? newPassword : QString();
+            ? EncodeString(newPassword) : QString();
         SendMessageText(QStringLiteral("MODE %1 +%2 %3 %4\r\n")
                             .arg(m_strChannel,
                                  QString::fromLatin1(modeBuffer),
@@ -891,15 +927,11 @@ bool CIrcProto::bChatShowMOTD()
 bool CIrcProto::ChatSetClientData(const QString& clientData)
 {
     if (!IsIRCX() || !m_pSock) return false;
-    auto* query = new CCQuery(qpSetClient, ctPropSet, dtMax, nullptr,
-                              m_strChannel, QString());
-    if (!m_pSock->m_queries.bAddQuery(query)) {
-        delete query;
-        return false;
-    }
-    SendMessageText(QStringLiteral("PROP %1 CLIENT :%2\r\n")
-                        .arg(m_strChannel, clientData));
-    return true;
+    const QByteArray encoded = clientData.isEmpty()
+        ? QByteArray() : EncodeStringBytes(clientData);
+    return bExecuteQuery(qpSetClient, ctPropSet, dtMax,
+                         const_cast<char*>(encoded.constData()),
+                         m_strChannel, QString());
 }
 
 void CIrcProto::HandleClientDataChange(const QString& newClientData)
@@ -938,7 +970,8 @@ void CIrcProto::ChatSetAway(bool away, const QString& message,
         return;
     }
 
-    SendMessageText(away ? QStringLiteral("AWAY :%1\r\n").arg(message)
+    SendMessageText(away ? QStringLiteral("AWAY :%1\r\n").arg(
+                               sourceCodePageCarrier(QStringView(message)))
                          : QStringLiteral("AWAY\r\n"));
     for (CChatDoc* document : g_docs) {
         if (document && document->m_proto
@@ -1024,7 +1057,7 @@ bool CIrcProto::bExecuteQuery(enumQueryPurpose qp, enumCommandType ct, enumDataT
                 selectedLength = userMatch->cbIPAddress;
             }
             if (selected) {
-                filter = QString::fromUtf8(
+                filter = QString::fromLatin1(
                     selected, static_cast<qsizetype>(selectedLength));
             }
         }
@@ -1118,7 +1151,8 @@ bool CIrcProto::bRegisterMode(const QString& message)
     const qsizetype separator = message.indexOf(QLatin1Char(' '));
     const QString target = separator < 0 ? message : message.left(separator);
     const QString parameters = separator < 0 ? QString() : message.mid(separator);
-    const QByteArray parameterBytes = parameters.toUtf8();
+    const QByteArray parameterBytes = sourceCodePageBytes(
+        QStringView(parameters));
     if (target.startsWith(QLatin1Char('#'))
         || target.startsWith(QLatin1Char('%'))
         || target.startsWith(QLatin1Char('&'))) {
@@ -1134,7 +1168,7 @@ bool CIrcProto::bRegisterMode(const QString& message)
 void CIrcProto::SendMessageText(const QString& raw)
 {
     if (m_pSock) {
-        m_pSock->SendRaw(raw);
+        m_pSock->SendRaw(raw.toLatin1());
     }
 }
 

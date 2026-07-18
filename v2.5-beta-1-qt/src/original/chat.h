@@ -124,6 +124,7 @@ public:
     QString m_lastBackDrop;
     QPointer<CMainFrame> m_pMainWnd;
     CChatDoc* m_pDoc = nullptr;
+    CChatDoc* m_pExitingDoc = nullptr;
     CDosKey m_doskeyMain;
     CDosKey m_doskeyWhisper;
     QList<CRoomInfo*> m_enterInfos;

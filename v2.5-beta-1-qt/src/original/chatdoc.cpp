@@ -87,11 +87,8 @@ CUserInfo* CChatDoc::GetSingleSelectedMember() const
 
 void CChatDoc::OnSetfont()
 {
-    // v2.5-beta-1-modern/chatdoc.cpp dispatches to SetComicsFont in comic
-    // mode and SetTextFont in text mode. Keep the source-defined text branch
-    // active; the separate common-font/color comic branch remains unavailable
-    // until SetComicsFont is ported without changing its dialog semantics.
-    if (!m_bComicView) SetTextFont();
+    if (m_bComicView) SetComicsFont();
+    else SetTextFont();
 }
 
 void CChatDoc::OnMemberGetinfo()

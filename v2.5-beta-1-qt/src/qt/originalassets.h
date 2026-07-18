@@ -67,12 +67,18 @@ struct OriginalDialogResource {
 
 QString originalAssetRoot();
 QString originalArtifactsRoot();
+QString originalV1SharedRoot();
 QString originalAssetPath(const QString& relativePath);
 QString originalArtifactPath(const QString& relativePath);
+QString originalV1SharedPath(const QString& fileName);
 QString originalResourcePath(const QString& fileName);
 QString originalComicArtPath(const QString& fileName);
 QString originalArtPackPath(const QString& fileName);
 QString originalArtPackArchivePath(const QString& fileName);
+
+// Registers the unmodified COMIC.TTF installed by the original v1 setup.
+// The returned identifier is the QFontDatabase application-font identifier.
+int registerOriginalComicFont();
 
 // Resolves a file declaration such as `IDR_MAINFRAME BITMAP ...` directly
 // from chat.rc. resourceType is the RC type token (for example BITMAP/ICON).

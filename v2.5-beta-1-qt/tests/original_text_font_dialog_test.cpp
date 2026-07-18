@@ -10,10 +10,15 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
-#include <QFontComboBox>
+#include <QFontDialog>
 #include <QFontMetrics>
+#include <QKeyEvent>
+#include <QLabel>
+#include <QLineEdit>
+#include <QListWidget>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QSignalBlocker>
 #include <QTabWidget>
 #include <QTextEdit>
 #include <QTimer>
@@ -96,6 +101,14 @@ int colorIndex(QComboBox* combo, COLORREF color)
 {
     return combo->findData(QVariant::fromValue<quint32>(color));
 }
+
+void sendTab(QWidget* widget)
+{
+    QKeyEvent press(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+    QApplication::sendEvent(widget, &press);
+    QKeyEvent release(QEvent::KeyRelease, Qt::Key_Tab, Qt::NoModifier);
+    QApplication::sendEvent(widget, &release);
+}
 }
 
 int main(int argc, char** argv)
@@ -104,6 +117,34 @@ int main(int argc, char** argv)
     QApplication application(argc, argv);
     theApp.InitVals();
     theApp.InitializeFonts();
+
+    {
+        const QFont before = theApp.m_comicsFont;
+        QTimer::singleShot(0, [] {
+            auto* dialog = qobject_cast<QFontDialog*>(
+                QApplication::activeModalWidget());
+            REQUIRE(dialog != nullptr);
+            dialog->reject();
+        });
+        SetComicsFont();
+        REQUIRE(theApp.m_comicsFont == before);
+
+        QFont selected(originalResourceString(
+            QStringLiteral("ID_COMIC_FONT_NAME")));
+        selected.setPointSize(18);
+        QTimer::singleShot(0, [selected] {
+            auto* dialog = qobject_cast<QFontDialog*>(
+                QApplication::activeModalWidget());
+            REQUIRE(dialog != nullptr);
+            dialog->setCurrentFont(selected);
+            dialog->accept();
+        });
+        SetComicsFont();
+        REQUIRE(theApp.m_comicsFont.family()
+                == originalResourceString(
+                    QStringLiteral("ID_COMIC_FONT_NAME")));
+        REQUIRE(theApp.m_comicsFont.pixelSize() == 18 * 20);
+    }
 
     REQUIRE(sizeof(LOGFONT) == 60);
     REQUIRE(sizeof(CHARFORMAT) == 60);
@@ -150,6 +191,72 @@ int main(int argc, char** argv)
     }
 
     {
+        const BOOL regularBefore = theApp.m_bCfInitialized;
+        const BOOL highlightBefore = theApp.m_bCfHLInitialized;
+        std::array<CHARFORMAT, NFONTS> appBefore{};
+        std::memcpy(appBefore.data(), theApp.m_cfArray,
+                    sizeof(theApp.m_cfArray));
+
+        std::array<CHARFORMAT, NFONTS> exact{};
+        const QByteArray face = QApplication::font().family().toLatin1();
+        REQUIRE(!face.isEmpty() && face.size() < LF_FACESIZE);
+        for (int index = 0; index < NFONTS; ++index) {
+            CHARFORMAT& format = exact[index];
+            format.cbSize = sizeof(CHARFORMAT);
+            format.dwMask = CFM_FACE | CFM_SIZE | CFM_OFFSET | CFM_COLOR
+                | CFM_BOLD | CFM_ITALIC | CFM_UNDERLINE
+                | CFM_STRIKEOUT | CFM_CHARSET;
+            if (index & 1) format.dwEffects |= CFE_BOLD | CFE_AUTOCOLOR;
+            if (index & 2) format.dwEffects |= CFE_ITALIC;
+            if (index & 4) format.dwEffects |= CFE_UNDERLINE;
+            if (index & 8) format.dwEffects |= CFE_STRIKEOUT;
+            format.yHeight = (8 + index % 5) * 20;
+            format.yOffset = index - NFONTS / 2;
+            format.crTextColor = clrTable[index % 16];
+            format.bCharSet = index & 1 ? ANSI_CHARSET : SYMBOL_CHARSET;
+            format.bPitchAndFamily = static_cast<BYTE>(index);
+            std::memcpy(format.szFaceName, face.constData(),
+                        static_cast<size_t>(face.size()));
+        }
+        std::memcpy(theApp.m_cfArray, exact.data(), sizeof(exact));
+        theApp.m_bCfInitialized = TRUE;
+        theApp.m_bCfHLInitialized = TRUE;
+
+        CMyFontDialog dialog;
+        dialog.show();
+        application.processEvents();
+        dialog.accept();
+        REQUIRE(std::memcmp(dialog.m_cfArray, exact.data(), sizeof(exact)) == 0);
+
+        CMyFontDialog changedDialog;
+        changedDialog.show();
+        application.processEvents();
+        auto* messageTypes = changedDialog.findChild<QComboBox*>(
+            QStringLiteral("IDC_MESSAGETYPE"));
+        auto* color = changedDialog.findChild<QComboBox*>(
+            QStringLiteral("1139"));
+        REQUIRE(messageTypes && color);
+        messageTypes->setCurrentIndex(3);
+        const COLORREF changedColor = differentSourceColor(
+            exact[2].crTextColor, 7);
+        color->setCurrentIndex(colorIndex(color, changedColor));
+        REQUIRE(color->currentIndex() >= 0);
+        changedDialog.OnFontChange();
+        changedDialog.accept();
+        REQUIRE(changedDialog.m_cfArray[2].crTextColor == changedColor);
+        for (int index = 0; index < NFONTS; ++index) {
+            if (index == 2) continue;
+            REQUIRE(std::memcmp(&changedDialog.m_cfArray[index],
+                                &exact[index], sizeof(CHARFORMAT)) == 0);
+        }
+
+        std::memcpy(theApp.m_cfArray, appBefore.data(),
+                    sizeof(theApp.m_cfArray));
+        theApp.m_bCfInitialized = regularBefore;
+        theApp.m_bCfHLInitialized = highlightBefore;
+    }
+
+    {
         const std::array<CHARFORMAT, NFONTS> appFormatsBefore = [&] {
             std::array<CHARFORMAT, NFONTS> result{};
             std::memcpy(result.data(), theApp.m_cfArray,
@@ -173,17 +280,20 @@ int main(int argc, char** argv)
         auto* messageTypes = dialog.findChild<QComboBox*>(
             QStringLiteral("IDC_MESSAGETYPE"));
         auto* preview = dialog.findChild<QTextEdit*>(QStringLiteral("5"));
-        auto* face = dialog.findChild<QFontComboBox*>(QStringLiteral("1136"));
-        auto* style = dialog.findChild<QComboBox*>(QStringLiteral("1137"));
-        auto* pointSize = dialog.findChild<QComboBox*>(QStringLiteral("1138"));
+        auto* face = dialog.findChild<QWidget*>(QStringLiteral("1136"));
+        auto* style = dialog.findChild<QWidget*>(QStringLiteral("1137"));
+        auto* pointSize = dialog.findChild<QWidget*>(QStringLiteral("1138"));
         auto* color = dialog.findChild<QComboBox*>(QStringLiteral("1139"));
         auto* script = dialog.findChild<QComboBox*>(QStringLiteral("1140"));
         auto* strikeout = dialog.findChild<QCheckBox*>(QStringLiteral("1040"));
         auto* underline = dialog.findChild<QCheckBox*>(QStringLiteral("1041"));
         auto* ok = dialog.findChild<QPushButton*>(QStringLiteral("IDOK"));
         auto* cancel = dialog.findChild<QPushButton*>(QStringLiteral("IDCANCEL"));
+        auto* apply = dialog.findChild<QPushButton*>(QStringLiteral("1026"));
+        auto* help = dialog.findChild<QPushButton*>(QStringLiteral("1038"));
         REQUIRE(messageTypes && preview && face && style && pointSize
-                && color && script && strikeout && underline && ok && cancel);
+                && color && script && strikeout && underline && ok && cancel
+                && apply && help);
         REQUIRE(messageTypes->geometry() == resourceRect(
             *resourceControl(resource, QStringLiteral("IDC_MESSAGETYPE")),
             dialog.font()));
@@ -197,8 +307,33 @@ int main(int argc, char** argv)
                 == QRect(mapper.x(5), mapper.y(20),
                          mapper.x(251), mapper.y(120)));
         REQUIRE(preview->isReadOnly());
+        REQUIRE(preview->focusPolicy() == Qt::ClickFocus);
         REQUIRE(strikeout->isTristate() && underline->isTristate());
         REQUIRE(color->count() == 16);
+
+        std::array<QListWidget*, 3> simpleLists{};
+        int simpleIndex = 0;
+        for (QWidget* simple : {face, style, pointSize}) {
+            auto* editor = simple->findChild<QLineEdit*>(
+                simple->objectName() + QStringLiteral(".Edit"));
+            auto* list = simple->findChild<QListWidget*>(
+                simple->objectName() + QStringLiteral(".List"));
+            REQUIRE(editor != nullptr);
+            REQUIRE(list != nullptr);
+            REQUIRE(list->focusPolicy() == Qt::NoFocus);
+            REQUIRE(resourceControl(resource, simple->objectName())
+                        ->style.contains(QStringLiteral("CBS_SIMPLE")));
+            simpleLists[static_cast<size_t>(simpleIndex++)] = list;
+        }
+
+        for (const QString& identifier : {
+                 QStringLiteral("1088"), QStringLiteral("1089"),
+                 QStringLiteral("1090"), QStringLiteral("1091"),
+                 QStringLiteral("1094")}) {
+            auto* label = dialog.findChild<QLabel*>(identifier);
+            REQUIRE(label != nullptr);
+            REQUIRE(label->buddy() != nullptr);
+        }
 
         const QStringList expectedTypes = expectedMessageTypes();
         REQUIRE(expectedTypes.size() == NFONTS + 1);
@@ -208,6 +343,27 @@ int main(int argc, char** argv)
 
         dialog.show();
         application.processEvents();
+        REQUIRE(!apply->isVisible());
+        REQUIRE(!help->isVisible());
+        for (QListWidget* list : simpleLists) {
+            REQUIRE(list->isVisible());
+            REQUIRE(list->geometry().top() > 0);
+            REQUIRE(list->geometry().bottom()
+                    == list->parentWidget()->rect().bottom());
+        }
+        auto* faceEditor = face->findChild<QLineEdit*>(
+            QStringLiteral("1136.Edit"));
+        auto* styleEditor = style->findChild<QLineEdit*>(
+            QStringLiteral("1137.Edit"));
+        REQUIRE(faceEditor != nullptr);
+        REQUIRE(styleEditor != nullptr);
+        messageTypes->setFocus();
+        application.processEvents();
+        REQUIRE(QApplication::focusWidget() == messageTypes);
+        sendTab(messageTypes);
+        REQUIRE(QApplication::focusWidget() == faceEditor);
+        sendTab(faceEditor);
+        REQUIRE(QApplication::focusWidget() == styleEditor);
         const QString previewText = preview->toPlainText();
         REQUIRE(previewText.contains(originalResourceString(
             QStringLiteral("IDS_SAMPLE_SEND"))));
@@ -258,6 +414,21 @@ int main(int argc, char** argv)
             REQUIRE(format.crTextColor == allColor);
         }
 
+        {
+            const QSignalBlocker blocked(strikeout);
+            strikeout->setCheckState(Qt::PartiallyChecked);
+        }
+        strikeout->click();
+        REQUIRE(strikeout->checkState() == Qt::Unchecked);
+        for (const CHARFORMAT& format : dialog.m_cfArray) {
+            REQUIRE(format.dwMask & CFM_STRIKEOUT);
+            REQUIRE(!(format.dwEffects & CFE_STRIKEOUT));
+        }
+        strikeout->click();
+        REQUIRE(strikeout->checkState() == Qt::Checked);
+        for (const CHARFORMAT& format : dialog.m_cfArray)
+            REQUIRE(format.dwEffects & CFE_STRIKEOUT);
+
         dialog.reject();
         REQUIRE(theApp.m_bCfInitialized == regularFlagBefore);
         REQUIRE(theApp.m_bCfHLInitialized == highlightFlagBefore);
@@ -290,6 +461,60 @@ int main(int argc, char** argv)
         REQUIRE(theApp.m_cfArray[2].dwMask & CFM_COLOR);
         REQUIRE(theApp.m_cfArray[2].crTextColor == acceptedColor);
         REQUIRE(theApp.m_textColor == acceptedColor);
+    }
+
+    {
+        theApp.m_flags1 &= ~DWORD(F1_RTFCOMIC);
+        theApp.m_bAutoDownloadAvatars = false;
+        theApp.m_bAutoDownloadBackdrops = true;
+        CComicsPropPage page;
+        const OriginalDialogResource resource = originalDialogResource(
+            QStringLiteral("IDD_COMICS_VIEW"));
+        const DluMapper mapper(page.font());
+        REQUIRE(page.objectName() == QStringLiteral("IDD_COMICS_VIEW"));
+        REQUIRE(page.layout() == nullptr);
+        REQUIRE(page.size() == QSize(mapper.x(resource.width),
+                                     mapper.y(resource.height)));
+
+        auto* setFont = page.findChild<QPushButton*>(
+            QStringLiteral("ID_SETFONT"));
+        auto* reset = page.findChild<QPushButton*>(
+            QStringLiteral("ID_RESET_TEXTFONTS"));
+        auto* richText = page.findChild<QCheckBox*>(
+            QStringLiteral("IDC_SHOWCOMICRTF"));
+        auto* panels = page.findChild<QComboBox*>(
+            QStringLiteral("IDC_PANELS"));
+        auto* characters = page.findChild<QCheckBox*>(
+            QStringLiteral("IDC_AUTODOWNLOAD_CHARS"));
+        auto* backdrops = page.findChild<QCheckBox*>(
+            QStringLiteral("IDC_AUTODOWNLOAD_BACKDROPS"));
+        REQUIRE(setFont && reset && richText && panels
+                && characters && backdrops);
+        REQUIRE(setFont->geometry() == resourceRect(
+            *resourceControl(resource, QStringLiteral("ID_SETFONT")),
+            page.font()));
+        REQUIRE(panels->count() == 4);
+        REQUIRE(panels->itemText(0) == originalResourceString(
+            QStringLiteral("IDS_1_WIDE")));
+        REQUIRE(!richText->isChecked());
+        REQUIRE(!characters->isChecked());
+        REQUIRE(backdrops->isChecked());
+
+        richText->click();
+        characters->click();
+        backdrops->click();
+        page.apply();
+        REQUIRE(theApp.m_flags1 & F1_RTFCOMIC);
+        REQUIRE(theApp.m_bAutoDownloadAvatars);
+        REQUIRE(!theApp.m_bAutoDownloadBackdrops);
+
+        reset->click();
+        REQUIRE(theApp.m_comicsFont.family()
+                == originalResourceString(
+                    QStringLiteral("ID_COMIC_FONT_NAME")));
+        REQUIRE(theApp.m_comicsFont.pixelSize()
+                == originalResourceString(
+                    QStringLiteral("IDS_DFLT_COMICSPNTSIZE")).toInt() * 20);
     }
 
     {
@@ -361,9 +586,16 @@ int main(int argc, char** argv)
         REQUIRE(tabs->indexOf(textPage) >= 0);
         REQUIRE(tabs->tabText(tabs->currentIndex()) == textCaption);
 
-        COptionsDialog comicOptions(TRUE, IDD_CHARACTERPAGE);
+        COptionsDialog comicOptions(TRUE, IDD_COMICS_VIEW);
         tabs = comicOptions.findChild<QTabWidget*>();
         REQUIRE(tabs != nullptr);
+        const QString comicsCaption = originalDialogCaption(
+            QStringLiteral("IDD_COMICS_VIEW"));
+        QWidget* comicsPage = tabs->findChild<QWidget*>(
+            QStringLiteral("IDD_COMICS_VIEW"));
+        REQUIRE(comicsPage != nullptr);
+        REQUIRE(tabs->indexOf(comicsPage) >= 0);
+        REQUIRE(tabs->tabText(tabs->currentIndex()) == comicsCaption);
         for (int index = 0; index < tabs->count(); ++index)
             REQUIRE(tabs->tabText(index) != textCaption);
     }

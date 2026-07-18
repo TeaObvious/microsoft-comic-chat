@@ -169,9 +169,631 @@ void GetBanString(const QString& userName, const QString& hostName,
     }
 }
 
+BOOL CIrcSocket::bFreeModeCell(const QString* channel,
+                              const QString* nickname)
+{
+    int userIndex = -1;
+    int channelIndex = -1;
+    LONG userRank = 0;
+    LONG channelRank = 0;
+    CCQuery* userQuery = nullptr;
+    CCQuery* channelQuery = nullptr;
+
+    if (nickname || (!nickname && !channel)) {
+        userQuery = m_queries.FindQuery(ctSetUserMode, &userIndex,
+                                        &userRank);
+    }
+    if (channel || (!nickname && !channel)) {
+        channelQuery = m_queries.FindQuery(ctSetChannelMode, &channelIndex,
+                                           &channelRank);
+    }
+
+    if (!userQuery || userQuery->GetQueryPurpose() != qpComSetUserMode)
+        userRank = 0;
+    if (!channelQuery
+        || channelQuery->GetQueryPurpose() != qpComSetChannelMode) {
+        channelRank = 0;
+    }
+
+    if (userRank && (!channelRank || userRank < channelRank)) {
+        return m_queries.FreeRemoveAt(userIndex);
+    }
+    if (channelRank && (!userRank || channelRank < userRank)) {
+        return m_queries.FreeRemoveAt(channelIndex);
+    }
+    return FALSE;
+}
+
+void CIrcSocket::HandleCommand(QString& displayLine,
+                               const QString& sourceLine,
+                               IRCPARSE* parse, CIrcPrint* ircPrint)
+{
+    if (!parse || !ircPrint || parse->args.isEmpty()) return;
+    const SHORT command = NGetCmd(parse->args[0]);
+    switch (command) {
+    case cmdidReply:
+    case cmdidRequest:
+        break;
+    case cmdidAuth:
+        // The source handles this through SSPI. Auth 2/3 remains disabled at
+        // this named platform boundary and must not report local success.
+        if (parse->nArgs >= 3) ircPrint->SetFormat(PT_NONE);
+        break;
+    case cmdidData:
+        ircPrint->SetFormat(PT_NONE);
+        break;
+    case cmdidClone:
+        ircPrint->SetFormat(PT_OFFSET, sourceLine, RGB(0, 0, 0), 1, TRUE);
+        break;
+    case cmdidKnock:
+        ircPrint->SetFormat(PT_WHOLESTRING, sourceLine,
+                            RGB(0, 0, 0), 0, TRUE);
+        break;
+    case cmdidPong:
+        ircPrint->SetFormat(PT_OFFSET, sourceLine, RGB(0, 0, 0), 1, TRUE);
+        break;
+    case cmdidKilled:
+        ircPrint->SetFormat(PT_WHOLESTRING, sourceLine,
+                            RGB(0, 0, 255), 0, TRUE);
+        break;
+    case cmdidNotice:
+    case cmdidPrivMsg:
+        ircPrint->SetFormat(PT_NONE);
+        if (parse->nick.isEmpty() && parse->user.isEmpty()) {
+            ircPrint->SetFormat(PT_LASTSTRING, sourceLine,
+                                RGB(128, 0, 128));
+        }
+        break;
+    case cmdidProp:
+        ircPrint->SetFormat(PT_OFFSET, sourceLine,
+                            RGB(0, 0, 0), 2);
+        break;
+    default:
+        break;
+    }
+    Q_UNUSED(displayLine);
+}
+
+void CIrcSocket::HandleResultCode(QString& displayLine,
+                                  const QString& sourceLine,
+                                  IRCPARSE* parse, CIrcPrint* ircPrint)
+{
+    if (!parse || !ircPrint || !parse->uCode) return;
+    switch (parse->uCode) {
+    case RPL_YOURHOST:
+    case RPL_CREATED:
+        ircPrint->SetFormat(PT_LASTSTRING, sourceLine, RGB(255, 0, 0));
+        break;
+    case RPL_MYINFO:
+    case RPL_FOOFORNOW:
+        ircPrint->SetFormat(PT_OFFSET, sourceLine,
+                            RGB(255, 0, 0), 3, TRUE);
+        break;
+    case RPL_TRACELINK:
+    case RPL_TRACECONNECTING:
+    case RPL_TRACEHANDSHAKE:
+    case RPL_TRACEUNKNOWN:
+    case RPL_TRACEOPERATOR:
+    case RPL_TRACEUSER:
+    case RPL_TRACESERVER:
+    case RPL_TRACENEWTYPE:
+    case RPL_TRACELOG:
+    case RPL_STATSLINKINFO:
+    case RPL_STATSCOMMANDS:
+    case RPL_STATSCLINE:
+    case RPL_STATSNLINE:
+    case RPL_STATSILINE:
+    case RPL_STATSKLINE:
+    case RPL_STATSYLINE:
+    case RPL_ENDOFSTATS:
+    case RPL_STATSLLINE:
+    case RPL_STATSUPTIME:
+    case RPL_STATSOLINE:
+    case RPL_STATSHLINE:
+    case RPL_ADMINME:
+        ircPrint->SetFormat(PT_OFFSET, sourceLine, RGB(0, 0, 0), 3,
+                            parse->uCode == RPL_ENDOFSTATS);
+        break;
+    case RPL_ADMINLOC1:
+    case RPL_ADMINLOC2:
+    case RPL_ADMINEMAIL:
+        ircPrint->SetFormat(PT_LASTSTRING, sourceLine,
+                            RGB(0, 0, 0), 0, FALSE);
+        break;
+    case RPL_USERHOST:
+        displayLine = originalResourceString(
+            QStringLiteral("IDS_USERHOST_PREFIX"));
+        displayLine.replace(QStringLiteral("%s"), parse->lastString);
+        ircPrint->SetFormat(PT_WHOLESTRING, displayLine,
+                            RGB(128, 0, 128), 0, TRUE);
+        break;
+    case RPL_ISON:
+        displayLine = originalResourceString(
+            QStringLiteral("IDS_ISON_PREFIX"));
+        displayLine.replace(QStringLiteral("%s"), parse->lastString);
+        ircPrint->SetFormat(PT_WHOLESTRING, displayLine,
+                            RGB(0, 0, 255), 0, TRUE);
+        break;
+    case RPL_WHOISUSER:
+        if (parse->nArgs >= 5) {
+            ircPrint->SetFormat(m_queries.FindQuery(ctWhoIs)
+                                    ? PT_NONE : PT_OFFSET,
+                                sourceLine, RGB(0, 0, 128), 3);
+        }
+        break;
+    case RPL_WHOISSERVER:
+    case RPL_WHOISOPERATOR:
+    case RPL_WHOISIDLE:
+    case RPL_WHOISCHANNELS:
+    case RPL_WHOISIP:
+        ircPrint->SetFormat(m_queries.FindQuery(ctWhoIs)
+                                ? PT_NONE : PT_OFFSET,
+                            sourceLine, RGB(0, 0, 128), 3);
+        break;
+    case RPL_ENDOFWHOIS:
+        if (parse->nArgs >= 3) {
+            ircPrint->SetFormat(m_queries.FindQuery(ctWhoIs)
+                                    ? PT_NONE : PT_OFFSET,
+                                sourceLine, RGB(0, 0, 128), 3, TRUE);
+        }
+        break;
+    case RPL_WHOWASUSER:
+    case RPL_ENDOFWHOWAS:
+        ircPrint->SetFormat(PT_OFFSET, sourceLine, RGB(0, 0, 128), 3,
+                            parse->uCode == RPL_ENDOFWHOWAS);
+        break;
+    case RPL_LINKS:
+    case RPL_ENDOFLINKS:
+        ircPrint->SetFormat(PT_OFFSET, sourceLine, RGB(0, 0, 0), 3,
+                            parse->uCode == RPL_ENDOFLINKS);
+        break;
+    case RPL_INFO:
+    case RPL_ENDOFINFO:
+    case RPL_VERSION:
+    case RPL_TIME:
+        ircPrint->SetFormat(PT_OFFSET, sourceLine, RGB(128, 0, 0), 3,
+                            parse->uCode != RPL_INFO);
+        break;
+    case RPL_YOUREOPER:
+    case RPL_YOUREADMIN:
+        ircPrint->SetFormat(PT_OFFSET, sourceLine,
+                            RGB(0, 0, 255), 2, TRUE);
+        break;
+    case RPL_CHANNELMODEIS:
+        if (parse->nArgs >= 4) {
+            ircPrint->SetFormat(m_queries.FindQuery(ctGetChannelMode)
+                                    ? PT_NONE : PT_OFFSET,
+                                sourceLine, RGB(0, 0, 0), 3);
+        }
+        break;
+    case RPL_NOTOPIC:
+        ircPrint->SetFormat(m_queries.FindQuery(ctTopic)
+                                ? PT_NONE : PT_OFFSET,
+                            sourceLine, RGB(0, 0, 128), 3, TRUE);
+        break;
+    case RPL_NAMEREPLY:
+        ircPrint->SetFormat(m_queries.FindQuery(ctNames)
+                                ? PT_NONE : PT_OFFSET,
+                            sourceLine, RGB(128, 128, 0), 4);
+        break;
+    case RPL_ENDOFNAMES:
+        ircPrint->SetFormat(m_queries.FindQuery(ctNames)
+                                ? PT_NONE : PT_OFFSET,
+                            sourceLine, RGB(128, 128, 0), 3, TRUE);
+        break;
+    case RPL_WHOREPLY:
+        if (parse->nArgs >= 8) {
+            ircPrint->SetFormat(m_queries.FindQuery(ctWho)
+                                    ? PT_NONE : PT_OFFSET,
+                                sourceLine, RGB(0, 128, 128), 3);
+        }
+        break;
+    case RPL_ENDOFWHO:
+        ircPrint->SetFormat(m_queries.FindQuery(ctWho)
+                                ? PT_NONE : PT_OFFSET,
+                            sourceLine, RGB(0, 128, 128), 3, TRUE);
+        break;
+    case RPL_IRCX:
+        ircPrint->SetFormat((m_queries.FindQuery(ctModeIsIrcX)
+                             || m_queries.FindQuery(ctIrcX))
+                                ? PT_NONE : PT_OFFSET,
+                            sourceLine, RGB(0, 0, 0), 3, TRUE);
+        break;
+    case RPL_ACCESSADD:
+    case RPL_ACCESSDELETE:
+    case RPL_ACCESSSTART:
+    case RPL_ACCESSLIST:
+    case RPL_ACCESSEND:
+    case RPL_EVENTADD:
+    case RPL_EVENTDEL:
+    case RPL_EVENTSTART:
+    case RPL_EVENTLIST:
+    case RPL_EVENTEND:
+        ircPrint->SetFormat(PT_OFFSET, sourceLine, RGB(0, 0, 0), 3,
+                            parse->uCode != RPL_ACCESSLIST
+                                && parse->uCode == RPL_EVENTLIST);
+        break;
+    case RPL_PROPLIST:
+        if (parse->nArgs >= 4) {
+            ircPrint->SetFormat(m_queries.FindQuery(ctPropGet)
+                                    ? PT_NONE : PT_OFFSET,
+                                sourceLine, RGB(0, 0, 0), 3, TRUE);
+        }
+        break;
+    case RPL_PROPEND:
+        if (parse->nArgs >= 3)
+            ircPrint->SetFormat(PT_NONE);
+        break;
+    default:
+        break;
+    }
+}
+
+namespace {
+void showIrcSourceMessage(const QString& message)
+{
+    QMessageBox::information(
+        theApp.m_pMainWnd.data(),
+        originalResourceString(QStringLiteral("AFX_IDS_APP_TITLE")),
+        message);
+}
+
+QString formattedIrcResource(const QString& identifier,
+                             const QString& value)
+{
+    QString message = originalResourceString(identifier);
+    message.replace(QStringLiteral("%s"), value);
+    return message;
+}
+}
+
+void CIrcSocket::HandleErrorCode(const QString& sourceLine,
+                                 IRCPARSE* parse, CIrcPrint* ircPrint)
+{
+    if (!parse || !ircPrint || !parse->uCode) return;
+    bool displayErrorInStatusWindow = false;
+    bool hasChannelName = false;
+    QString channelName;
+    int roomIndex = -1;
+    CRoomInfo* enterInfo = nullptr;
+
+    switch (parse->uCode) {
+    default:
+        displayErrorInStatusWindow = true;
+        break;
+    case ERR_NOSUCHNICK: {
+        const QString object = parse->args.value(2);
+        const bool isChannel = !object.isEmpty()
+            && (object.front() == QLatin1Char('#')
+                || object.front() == QLatin1Char('%')
+                || object.front() == QLatin1Char('&'));
+        if (isChannel) {
+            showIrcSourceMessage(formattedIrcResource(
+                QStringLiteral("IDS_ERR_NOSUCHCHANNEL"),
+                DecodeChan(object)));
+        } else {
+            showIrcSourceMessage(formattedIrcResource(
+                QStringLiteral("IDS_ERR_NOSUCHNICK"),
+                DecodeNick(object)));
+            bFreeModeCell(nullptr, &object);
+        }
+        break;
+    }
+    case ERR_NOSUCHCHANNEL: {
+        const QString object = parse->args.value(2);
+        enterInfo = theApp.GetRoomInfoFromName(object, &roomIndex,
+                                               false, true);
+        if (enterInfo) {
+            ShowBadChannelName(object);
+        } else {
+            int queryIndex = -1;
+            CCQuery* query = m_queries.FindQuery(ctTopic, &queryIndex);
+            QString message;
+            roomIndex = 0;
+            if (query && query->GetQueryPurpose() == qpListMembers
+                && query->GetChannelName() == object) {
+                m_queries.FreeRemoveAt(queryIndex);
+                message = formattedIrcResource(
+                    QStringLiteral("IDS_ERR_NOSUCHCHANNELANYMORE"),
+                    DecodeChan(object));
+                if (theApp.m_pRoomList)
+                    theApp.m_pRoomList->ReenableListMembers();
+            } else {
+                message = formattedIrcResource(
+                    QStringLiteral("IDS_ERR_NOSUCHCHANNEL"),
+                    DecodeChan(object));
+                bFreeModeCell(&object, &object);
+            }
+            showIrcSourceMessage(message);
+        }
+        break;
+    }
+    case ERR_TOOMANYCHANNELS:
+        showIrcSourceMessage(originalResourceString(
+            QStringLiteral("IDS_ERR_TOOMANYCHANNELS")));
+        break;
+    case ERR_NOMOTD: {
+        const QString message = originalResourceString(IDS_ERR_NOMOTD);
+        CIrcPrint motdPrint;
+        motdPrint.SetFormat(PT_WHOLESTRING, message,
+                            RGB(0, 0, 255), 0, TRUE);
+        AddToStatus(motdPrint, message);
+        int queryIndex = -1;
+        CCQuery* query = m_queries.FindQuery(ctLUsersMOTD, &queryIndex);
+        if (query) {
+            if ((query->GetQueryPurpose() == qpLUsersMOTD
+                 || (theApp.m_flags1 & F1_SHOWMOTD))
+                && !m_strLUSER.isEmpty()) {
+                ShowMOTD(m_strLUSER, QString());
+            }
+            m_queries.FreeRemoveAt(queryIndex);
+        }
+        m_strLUSER.clear();
+        theApp.m_bDisableMOTD = false;
+        break;
+    }
+    case ERR_NONICKNAMEGIVEN:
+    case ERR_ERRONEUSNICKNAME:
+    case ERR_NICKNAMEINUSE: {
+        const int argumentIndex = parse->uCode == ERR_NICKNAMEINUSE ? 2 : 1;
+        const QString badNickname = parse->nArgs >= argumentIndex + 1
+            ? parse->args.value(argumentIndex) : QStringLiteral("");
+        if (CIrcProto* protocol = m_proto ? m_proto : GetIrcProto()) {
+            protocol->TryNewNick(
+                parse->uCode == ERR_NICKNAMEINUSE
+                    ? ID_ERR_DUPED_NICK : ID_ERR_BAD_NICK,
+                m_bIrcXServer ? DecodeNick(badNickname) : badNickname);
+        }
+        break;
+    }
+    case ERR_NICKCOLLISION:
+        showIrcSourceMessage(originalResourceString(
+            QStringLiteral("IDS_ERR_NICKCOLLISION")));
+        break;
+    case ERR_NICKTOOFAST:
+        showIrcSourceMessage(originalResourceString(
+            QStringLiteral("IDS_ERR_NICKTOOFAST")));
+        break;
+    case ERR_NICKNOCHANGE:
+        showIrcSourceMessage(originalResourceString(
+            QStringLiteral("IDS_ERR_NICKNOCHANGE")));
+        break;
+    case ERR_NOTONCHANNEL: {
+        int queryIndex = -1;
+        CCQuery* query = m_queries.FindQuery(ctTopic, &queryIndex);
+        if (query && query->GetQueryPurpose() == qpListMembers) {
+            const QString encodedRoom = query->GetChannelName();
+            const QString prettyRoom = query->GetData()
+                ? *static_cast<QString*>(query->GetData()) : QString();
+            m_queries.FreeRemoveAt(queryIndex);
+            OnUserListAux(QString(), encodedRoom, prettyRoom);
+        } else {
+            const QString object = parse->args.value(2);
+            bFreeModeCell(&object, nullptr);
+            displayErrorInStatusWindow = true;
+        }
+        break;
+    }
+    case ERR_NOTREGISTERED:
+        HrModeIsIrcXFailure();
+        break;
+    case ERR_NEEDMOREPARAMS:
+        bFreeModeCell(nullptr, nullptr);
+        displayErrorInStatusWindow = true;
+        break;
+    case ERR_PASSWDMISMATCH:
+        HrIrcSetOper(m_pszUserName);
+        break;
+    case ERR_YOUREBANNEDCREEP:
+        showIrcSourceMessage(originalResourceString(
+            QStringLiteral("IDS_ERR_YOUREBANNEDCREEP")));
+        break;
+    case ERR_YOUWILLBEBANNED:
+        showIrcSourceMessage(originalResourceString(
+            QStringLiteral("IDS_ERR_YOUWILLBEBANNED")));
+        break;
+    case ERR_KEYSET: {
+        const QString object = parse->args.value(2);
+        bFreeModeCell(&object, nullptr);
+        displayErrorInStatusWindow = true;
+        break;
+    }
+    case ERR_CHANNELISFULL:
+        showIrcSourceMessage(formattedIrcResource(
+            QStringLiteral("ID_ERR_CHANNELISFULL"),
+            DecodeChan(parse->args.value(2))));
+        break;
+    case ERR_UNKNOWNMODE:
+        bFreeModeCell(nullptr, nullptr);
+        displayErrorInStatusWindow = true;
+        break;
+    case ERR_INVITEONLYCHAN:
+        showIrcSourceMessage(formattedIrcResource(
+            QStringLiteral("ID_ERR_INVITEONLY"),
+            DecodeChan(parse->args.value(2))));
+        break;
+    case ERR_BANNEDFROMCHAN:
+        showIrcSourceMessage(formattedIrcResource(
+            QStringLiteral("ID_ERR_BANNEDFROMCHAN"),
+            DecodeChan(parse->args.value(2))));
+        break;
+    case ERR_BADCHANNELKEY:
+        enterInfo = theApp.GetRoomInfoFromName(parse->args.value(2),
+                                               &roomIndex);
+        if (enterInfo) OnBadChannelPassword(*enterInfo);
+        break;
+    case ERR_CHANOPRIVSNEEDED: {
+        const QString object = parse->args.value(2);
+        if (!bFreeModeCell(&object, nullptr)) {
+            int queryIndex = -1;
+            CCQuery* query = m_queries.FindQuery(ctTopic, &queryIndex);
+            if (query && query->GetQueryPurpose() == qpSetTopic)
+                m_queries.FreeRemoveAt(queryIndex);
+        }
+        displayErrorInStatusWindow = true;
+        break;
+    }
+    case ERR_UMODEUNKNOWNFLAG:
+    case ERR_USERSDONTMATCH: {
+        const QString emptyNickname;
+        bFreeModeCell(nullptr, &emptyNickname);
+        displayErrorInStatusWindow = true;
+        break;
+    }
+    case ERR_NOJOINDYNAMIC:
+        showIrcSourceMessage(originalResourceString(
+            QStringLiteral("IDS_ERR_NOJOINDYNAMIC")));
+        break;
+    case ERR_NODYNAMICCHANNELS:
+        showIrcSourceMessage(originalResourceString(
+            QStringLiteral("IDS_ERR_NODYNAMICCHANNELS")));
+        break;
+    case ERR_AUTHONLY:
+        showIrcSourceMessage(originalResourceString(
+            QStringLiteral("IDS_ERR_AUTHONLY")));
+        break;
+    case ERR_BADFUNCTION:
+        if (!m_bIrcXServer) {
+            showIrcSourceMessage(originalResourceString(
+                QStringLiteral("IDS_ERR_NODYNAMICCHANNELS")));
+        }
+        break;
+    case ERR_BADTAG:
+        if (!m_bIrcXServer) {
+            showIrcSourceMessage(originalResourceString(
+                QStringLiteral("IDS_ERR_AUTHONLY")));
+        }
+        break;
+    case ERR_BADPROPERTY:
+        if (!m_bIrcXServer) {
+            showIrcSourceMessage(originalResourceString(
+                QStringLiteral("IDS_ERR_NICKNOCHANGE")));
+        }
+        break;
+    case ERR_RESOURCE:
+        if (!m_bIrcXServer) {
+            showIrcSourceMessage(originalResourceString(
+                QStringLiteral("IDS_ERR_NOJOINDYNAMIC")));
+        }
+        break;
+    case ERR_AUTHENTICATIONFAILED:
+        showIrcSourceMessage(originalResourceString(
+            QStringLiteral("ID_ERR_BADUSERINFO")));
+        m_bAuthFailed = TRUE;
+        // HrIrcXLogin's SSPI package retry remains disabled at the same
+        // platform boundary as AUTH; this does not report local success.
+        break;
+    case ERR_UNKNOWNPACKAGE:
+        // The rejected package itself remains unavailable, but the original
+        // package-order state and eventual ANON/failure branch still apply.
+        HrIrcXLogin(TRUE);
+        break;
+    case ERR_NOSUCHOBJECT: {
+        int queryIndex = -1;
+        CCQuery* query = m_queries.FindQuery(ctPropGet, &queryIndex);
+        if (query) {
+            if ((query->GetQueryPurpose() == qpJoinPics
+                 || query->GetQueryPurpose() == qpCreatePics)
+                && query->GetChannelName() == parse->args.value(2)) {
+                if (bCanViewUnrated(TRUE)) {
+                    enterInfo = theApp.GetRoomInfoFromName(
+                        parse->args.value(2));
+                    if (m_proto && enterInfo) {
+                        if (query->GetQueryPurpose() == qpJoinPics)
+                            m_proto->ChatJoinAux(*enterInfo);
+                        else
+                            m_proto->ChatCreateAux(*enterInfo);
+                    }
+                }
+                m_queries.FreeRemoveAt(queryIndex);
+            }
+        } else {
+            displayErrorInStatusWindow = true;
+        }
+        break;
+    }
+    }
+
+    switch (parse->uCode) {
+    case ERR_USERONCHANNEL:
+        channelName = parse->args.value(3);
+        hasChannelName = true;
+        break;
+    case ERR_NOSUCHNICK:
+    case ERR_INVITEONLYCHAN:
+    case ERR_CHANNELISFULL:
+    case ERR_NOSUCHCHANNEL:
+    case ERR_BANNEDFROMCHAN:
+    case ERR_BADCHANNELKEY:
+    case ERR_TOOMANYCHANNELS:
+        channelName = parse->args.value(2);
+        hasChannelName = true;
+        break;
+    default:
+        break;
+    }
+
+    if (m_bIrcXServer) {
+        switch (parse->uCode) {
+        case ERR_NOJOINDYNAMIC:
+        case ERR_NODYNAMICCHANNELS:
+        case ERR_AUTHONLY:
+        case ERR_CHANNELEXIST:
+            channelName = parse->args.value(2);
+            hasChannelName = true;
+            break;
+        case ERR_NOACCESS:
+            if (parse->args.value(2) != QLatin1String("*")) {
+                channelName = parse->args.value(2);
+                hasChannelName = true;
+            }
+            break;
+        default:
+            break;
+        }
+    } else {
+        switch (parse->uCode) {
+        case ERR_CANNOTJOINMICONLY:
+        case ERR_CANNOTJOINFROMREMOTE:
+        case ERR_CANNOTCREATEDYNAMIC:
+        case ERR_ONLYAUTHCANJOIN:
+        case ERR_CANNOTJOINDYNAMIC:
+            channelName = parse->args.value(2);
+            hasChannelName = true;
+            break;
+        default:
+            break;
+        }
+    }
+
+    if (hasChannelName) {
+        if (roomIndex == -1) {
+            enterInfo = theApp.GetRoomInfoFromName(channelName, &roomIndex,
+                                                   false);
+        }
+        if (enterInfo && roomIndex > 0)
+            theApp.RemoveRoomInfo(roomIndex);
+    }
+
+    if (displayErrorInStatusWindow) {
+        ircPrint->SetFormat(PT_OFFSET, sourceLine,
+                            RGB(255, 0, 0), 3, TRUE);
+    } else {
+        ircPrint->SetFormat(PT_NONE);
+    }
+}
+
 namespace {
 QString g_strBan;
 QStringList g_arrayBans;
+
+QString sourceCodePageCarrier(QStringView text)
+{
+    QByteArray bytes;
+    if (!bWideToCodePage(text, GetACP(), &bytes))
+        bytes = text.toString().toLatin1();
+    return QString::fromLatin1(bytes);
+}
 
 bool channelPrefix(const QString& value)
 {
@@ -195,16 +817,25 @@ bool isAppearsAsMessage(const QString& message)
     return message.startsWith(QStringLiteral("# Appears as "));
 }
 
-void setRoomTopic(CChatDoc* doc, const QString& controlFullTopic)
+QString setRoomTopic(CChatDoc* doc, const QString& controlFullTopic,
+                     CDWordArray* copiedFormatting = nullptr)
 {
-    if (!doc || !doc->m_proto) return;
     QByteArray bytes = controlFullTopic.toUtf8();
     CDWordArray formatting;
     char* controlLess = SzControlLess(bytes.data(), &formatting);
-    FreeAndNullFormatting(&doc->m_proto->m_prgdwTopicFormatting);
-    doc->m_proto->m_prgdwTopicFormatting = CopyFormatting(&formatting);
-    doc->m_proto->m_strTopic = controlLess
+    const QString topic = controlLess
         ? QString::fromUtf8(controlLess) : QString();
+    if (copiedFormatting) {
+        copiedFormatting->RemoveAll();
+        for (int index = 0; index < formatting.GetSize(); ++index)
+            copiedFormatting->Add(formatting.GetAt(index));
+    }
+    if (doc && doc->m_proto) {
+        FreeAndNullFormatting(&doc->m_proto->m_prgdwTopicFormatting);
+        doc->m_proto->m_prgdwTopicFormatting = CopyFormatting(&formatting);
+        doc->m_proto->m_strTopic = topic;
+    }
+    return topic;
 }
 
 void ParseChannelMode(CChatDoc* doc, const QString& flags,
@@ -290,19 +921,13 @@ void CSInString(QString* string, const QString& channelName, CChatDoc* doc)
     if (doc && doc->m_proto && (doc->m_proto->m_dwModes & CM_MIC)) {
         encoding = ENC_DBCS;
     }
-    if (string->isEmpty()
-        || (theApp.m_charSet == ANSI_CHARSET && encoding == ENC_DBCS)) {
-        return;
-    }
+    if (string->isEmpty()) return;
     *string = DecodeString(string->toLatin1(), encoding);
 }
 
 void CSInPlace(QString* nickname)
 {
-    if (!nickname || nickname->isEmpty()
-        || theApp.m_charSet == ANSI_CHARSET) {
-        return;
-    }
+    if (!nickname || nickname->isEmpty()) return;
     CSInString(nickname);
 }
 
@@ -391,9 +1016,13 @@ void CIrcSocket::Disconnect()
 
 void CIrcSocket::Reset()
 {
+    m_nSecuPackIndex = -1;
     m_bIrcXServer = false;
     m_bRegistered = false;
+    m_bAnonAllowed = FALSE;
+    m_bAuthFailed = FALSE;
     m_bJustSentModeIsIrcX = false;
+    m_rgszSvrSecuPack.clear();
     m_ircXTimer->stop();
     m_pending.clear();
 }
@@ -401,7 +1030,7 @@ void CIrcSocket::Reset()
 void CIrcSocket::SendRaw(const QString& raw)
 {
     if (m_socket->state() == QAbstractSocket::ConnectedState) {
-        m_socket->write(raw.toUtf8());
+        m_socket->write(raw.toLatin1());
     }
 }
 
@@ -481,11 +1110,17 @@ void CIrcSocket::SetAuthentication(UINT type, const QString& userName,
                                    const QString& password,
                                    const QString& customPackages)
 {
+    m_rgszUsrSecuPack.clear();
     m_nAuthenticationType = type;
+    m_bAnonAllowed = FALSE;
     m_pszUserName = userName.isEmpty() ? QString() : userName;
     m_pszPassword = password.isEmpty() ? QString() : password;
-    m_pszSecurityPackages = customPackages.isEmpty()
-        ? QString() : customPackages;
+    if (!customPackages.isEmpty()
+        && m_nAuthenticationType
+            == CChatServer::authtypeCustomPackages) {
+        m_rgszUsrSecuPack = customPackages.split(
+            QLatin1Char(','), Qt::KeepEmptyParts);
+    }
 }
 
 bool CIrcSocket::HrIrcLogin(bool ircX, const QString& nickname,
@@ -515,7 +1150,8 @@ bool CIrcSocket::HrIrcLogin(bool ircX, const QString& nickname,
     }
 
     if (!loginPassword.isEmpty()) {
-        const QString pass = QStringLiteral("PASS %1\r\n").arg(loginPassword);
+        const QString pass = QStringLiteral("PASS %1\r\n").arg(
+            sourceCodePageCarrier(QStringView(loginPassword)));
         if (m_proto) m_proto->SendMessageText(pass);
         else SendRaw(pass);
     }
@@ -525,7 +1161,8 @@ bool CIrcSocket::HrIrcLogin(bool ircX, const QString& nickname,
             return false;
         }
     } else {
-        SendRaw(QStringLiteral("NICK %1\r\n").arg(nick));
+        SendRaw(QStringLiteral("NICK %1\r\n").arg(
+            sourceCodePageCarrier(QStringView(nick))));
     }
 
     if (!m_bRegistered) {
@@ -534,7 +1171,9 @@ bool CIrcSocket::HrIrcLogin(bool ircX, const QString& nickname,
             machineName = QString::fromLatin1(g_szNoMachine);
         }
         const QString registration = QStringLiteral("USER %1 %2 . :%3\r\n")
-                                         .arg(user, machineName, real);
+            .arg(sourceCodePageCarrier(QStringView(user)),
+                 sourceCodePageCarrier(QStringView(machineName)),
+                 sourceCodePageCarrier(QStringView(real)));
         if (m_proto) m_proto->SendMessageText(registration);
         else SendRaw(registration);
         m_bRegistered = true;
@@ -542,12 +1181,77 @@ bool CIrcSocket::HrIrcLogin(bool ircX, const QString& nickname,
     if (!ircX
         && m_nAuthenticationType == CChatServer::authtypePlainText
         && !m_pszUserName.isEmpty() && !m_pszPassword.isEmpty()) {
-        const QString oper = QStringLiteral("OPER %1 %2\r\n")
-            .arg(m_pszUserName, m_pszPassword);
-        if (m_proto) m_proto->SendMessageText(oper);
-        else SendRaw(oper);
+        HrIrcSetOper(m_pszUserName, m_pszPassword);
     }
     return true;
+}
+
+bool CIrcSocket::HrIrcSetOper(const QString& userName,
+                              const QString& password)
+{
+    QString operPassword = password;
+    if (operPassword.isEmpty()) {
+        if (!PromptForPassword(userName, FALSE)) {
+            return false;
+        }
+        operPassword = m_pszPassword;
+    }
+
+    const QString oper = QStringLiteral("OPER %1 %2\r\n")
+        .arg(sourceCodePageCarrier(QStringView(userName)),
+             sourceCodePageCarrier(QStringView(operPassword)));
+    if (m_proto) m_proto->SendMessageText(oper);
+    else SendRaw(oper);
+    return true;
+}
+
+bool CIrcSocket::HrIrcXLogin(BOOL forceNextPackage)
+{
+    if (m_bAnonAllowed
+        && (m_nAuthenticationType == CChatServer::authtypeNone
+            || m_nAuthenticationType
+                == CChatServer::authtypePlainText)) {
+        return HrIrcLogin(true);
+    }
+
+    if (forceNextPackage) ++m_nSecuPackIndex;
+
+    if (m_nAuthenticationType
+        == CChatServer::authtypeCustomPackages) {
+        while (m_nSecuPackIndex < m_rgszUsrSecuPack.size()) {
+            const QString securityPackage =
+                m_rgszUsrSecuPack.at(m_nSecuPackIndex);
+            if (securityPackage.compare(QString::fromLatin1(g_szAnon),
+                                        Qt::CaseInsensitive) == 0) {
+                if (m_bAnonAllowed) return HrIrcLogin(true);
+            }
+            // HrAuthenticate is the Windows SSPI boundary. An unavailable
+            // package follows the source failure path to the next package.
+            ++m_nSecuPackIndex;
+        }
+    } else {
+        // Server-package authentication is the same unavailable SSPI
+        // boundary. Preserve source ordering, then use ANON only where the
+        // server advertised it.
+        m_nSecuPackIndex = static_cast<short>(m_rgszSvrSecuPack.size());
+        if (m_bAnonAllowed) return HrIrcLogin(true);
+    }
+
+    const bool resumeConnection = theApp.m_SrvConnector.IsConnecting()
+        && theApp.m_SrvConnector.GetNumServers() > 1;
+    Disconnect();
+    if (resumeConnection) {
+        ChatServerDisconnect(FALSE, TRUE);
+        theApp.ResumeConnection();
+    } else {
+        ChatServerDisconnect(TRUE, FALSE);
+        showIrcSourceMessage(originalResourceString(
+            QStringLiteral("IDS_CONNECTION_DROPPED")));
+    }
+    showIrcSourceMessage(originalResourceString(
+        QStringLiteral("ID_ERR_NOAUTH")));
+    if (theApp.m_pMainWnd) theApp.m_pMainWnd->CreateNewDocument();
+    return false;
 }
 
 void CIrcSocket::HrModeIsIrcXFailure()
@@ -606,11 +1310,7 @@ void ParseItBytes(const QByteArray& source, IRCPARSE* parse,
                                                bool extendedIdentifier) {
         const QByteArray bounded = bytes.left(maximum);
         if (!rawByteCarrier) return QString::fromUtf8(bounded);
-        if (extendedIdentifier && !bounded.isEmpty()
-            && (bounded.front() == g_chExtNckPfx
-                || bounded.front() == g_chExtChnPfx)) {
-            return QString::fromUtf8(bounded);
-        }
+        Q_UNUSED(extendedIdentifier);
         return QString::fromLatin1(bounded);
     };
 
@@ -766,9 +1466,26 @@ void CIrcSocket::ProcessMessageBytes(const QByteArray& rawLine)
         return;
     }
 
-    if (parse.command == QLatin1String("ERROR")
-        && parse.bHasLastString) {
-        CSInString(&parse.lastString);
+    if (parse.command == QLatin1String("ERROR")) {
+        if (parse.bHasLastString) {
+            CSInString(&parse.lastString);
+            if (!theApp.m_SrvConnector.IsConnecting()
+                || ((!theApp.m_SrvConnector.GetNumServers()) == 1)) {
+                if (parse.lastString.contains(
+                        QStringLiteral("No IRC clients"))) {
+                    showIrcSourceMessage(originalResourceString(
+                        QStringLiteral("IDS_MICONLY")));
+                } else {
+                    showIrcSourceMessage(parse.lastString);
+                }
+                if (theApp.m_pMainWnd)
+                    theApp.m_pMainWnd->CreateNewDocument();
+            } else if (m_bJustSentModeIsIrcX) {
+                ircPrint.SetFormat(PT_NONE);
+                HrModeIsIrcXFailure();
+            }
+        }
+        return;
     }
 
     if (parse.uCode == RPL_WELCOME) {
@@ -894,12 +1611,9 @@ void CIrcSocket::ProcessMessageBytes(const QByteArray& rawLine)
         return;
     }
 
-    if (parse.command == QLatin1String("ERROR") && m_bJustSentModeIsIrcX) {
-        HrModeIsIrcXFailure();
-        return;
-    }
-
-    if (parse.uCode == 800 && parse.args.size() >= 3) {
+    if (parse.uCode == RPL_IRCX && parse.args.size() >= 3) {
+        QString displayLine;
+        HandleResultCode(displayLine, line, &parse, &ircPrint);
         int queryIndex = -1;
         CCQuery* query = m_queries.FindQuery(ctModeIsIrcX, &queryIndex);
         if (!query) {
@@ -910,10 +1624,22 @@ void CIrcSocket::ProcessMessageBytes(const QByteArray& rawLine)
         }
         m_queries.FreeRemoveAt(queryIndex);
         if (parse.args[2] == QLatin1String("0")) {
-            if (parse.args.size() >= 6) {
+            if (parse.nArgs >= 7) {
+                const QStringList packages = parse.args[4].split(
+                    QLatin1Char(','), Qt::KeepEmptyParts);
+                for (const QString& securityPackage : packages) {
+                    if (securityPackage.compare(
+                            QString::fromLatin1(g_szAnon),
+                            Qt::CaseInsensitive) == 0) {
+                        m_bAnonAllowed = TRUE;
+                    } else {
+                        m_rgszSvrSecuPack.append(securityPackage);
+                    }
+                }
                 bool validMaximum = false;
-                const int maximum = parse.args.last().toInt(&validMaximum);
-                if (validMaximum > m_nMaxMsgLength) {
+                const int maximum = parse.args[parse.nArgs - 2]
+                    .toInt(&validMaximum);
+                if (validMaximum && maximum > m_nMaxMsgLength) {
                     m_nMaxMsgLength = static_cast<short>(maximum);
                 }
             }
@@ -925,21 +1651,32 @@ void CIrcSocket::ProcessMessageBytes(const QByteArray& rawLine)
                                        QString(), QString());
             }
         } else {
-            HrIrcLogin(true);
+            HrIrcXLogin(TRUE);
         }
         return;
     }
 
     if (parse.uCode == RPL_PROPLIST && parse.nArgs >= 4) {
+        QString displayLine;
+        HandleResultCode(displayLine, line, &parse, &ircPrint);
         CCQuery* query = m_queries.FindQuery(ctPropGet);
         if (!query) return;
         switch (query->GetQueryPurpose()) {
         case qpJoinPics:
         case qpCreatePics:
-            // The original marks the query consumed before invoking its PICS
-            // rating provider. That provider is not yet ported, so no join or
-            // create success is synthesized here.
             query->SetQueryPurpose(qpMax);
+            if (bPassesRatings(parse.lastString, TRUE)) {
+                CRoomInfo* enterInfo = theApp.GetRoomInfoFromName(
+                    parse.args[2]);
+                if (m_proto && enterInfo) {
+                    // Preserve source order: the query purpose has already
+                    // changed to qpMax before the comparison.
+                    if (query->GetQueryPurpose() == qpJoinPics)
+                        m_proto->ChatJoinAux(*enterInfo);
+                    else
+                        m_proto->ChatCreateAux(*enterInfo);
+                }
+            }
             break;
         case qpJoinBackUrl:
             if (m_proto) m_proto->HandleClientDataChange(parse.lastString);
@@ -951,12 +1688,32 @@ void CIrcSocket::ProcessMessageBytes(const QByteArray& rawLine)
     }
 
     if (parse.uCode == RPL_PROPEND && parse.nArgs >= 3) {
+        QString displayLine;
+        HandleResultCode(displayLine, line, &parse, &ircPrint);
         int queryIndex = -1;
-        if (m_queries.FindQuery(ctPropGet, &queryIndex)) {
-            // qpJoinBackUrl and an already consumed qpMax have no end action
-            // in the source. Rating-dependent join/create remains blocked,
-            // but the completed query still has source-equivalent lifetime.
-            m_queries.FreeRemoveAt(queryIndex);
+        if (CCQuery* query = m_queries.FindQuery(ctPropGet, &queryIndex)) {
+            query = m_queries.RemoveAt(queryIndex);
+            switch (query->GetQueryPurpose()) {
+            case qpJoinPics:
+            case qpCreatePics:
+                if (bCanViewUnrated(TRUE)) {
+                    CRoomInfo* enterInfo = theApp.GetRoomInfoFromName(
+                        parse.args[2]);
+                    if (m_proto && enterInfo) {
+                        if (query->GetQueryPurpose() == qpJoinPics)
+                            m_proto->ChatJoinAux(*enterInfo);
+                        else
+                            m_proto->ChatCreateAux(*enterInfo);
+                    }
+                }
+                break;
+            case qpJoinBackUrl:
+            case qpMax:
+                break;
+            default:
+                break;
+            }
+            delete query;
         }
         return;
     }
@@ -1063,8 +1820,8 @@ void CIrcSocket::ProcessMessageBytes(const QByteArray& rawLine)
     }
 
     if (parse.uCode == RPL_LISTXPICS) {
+        m_pendingListXAdd = bPassesRatings(parse.lastString);
         if (m_queries.FindQuery(ctListX)) {
-            m_pendingListXAdd = bPassesRatings(parse.lastString);
             ircPrint.SetFormat(PT_NONE);
         } else {
             ircPrint.SetFormat(PT_OFFSET, line, RGB(128, 0, 128), 3);
@@ -1107,7 +1864,9 @@ void CIrcSocket::ProcessMessageBytes(const QByteArray& rawLine)
     if (parse.command == QLatin1String("INVITE")
         && parse.bHasLastString) {
         CSInPlace(&parse.user);
-        OnInvite(parse.nick, identFromParse(parse), parse.lastString);
+        OnInvite(parse.nick,
+                 parse.user + QLatin1Char('@') + parse.machine,
+                 parse.lastString);
         ircPrint.SetFormat(PT_NONE);
         return;
     }
@@ -1192,7 +1951,13 @@ void CIrcSocket::ProcessMessageBytes(const QByteArray& rawLine)
     }
 
     if (parse.command == QLatin1String("MODE") && parse.args.size() >= 3) {
-        ircPrint.SetFormat(PT_NONE);
+        constexpr BYTE modeCacheNone = 0;
+        constexpr BYTE modeCacheHostLost = 1;
+        constexpr BYTE modeCacheOwnerLost = 2;
+        static QString lostChannel;
+        static QString lostNickname;
+        static BYTE lostStatus = modeCacheNone;
+
         CChatDoc* doc = LookupDoc(parse.args[1]);
         if (doc) {
             ParseChannelMode(doc, parse.args[2],
@@ -1206,6 +1971,36 @@ void CIrcSocket::ProcessMessageBytes(const QByteArray& rawLine)
                                                     Qt::CaseInsensitive) == 0) {
                 m_queries.FreeRemoveAt(queryIndex);
                 ircPrint.SetFormat(PT_OFFSET, line, RGB(0, 0, 0), 1, TRUE);
+                const QString flags = parse.args[2];
+                const bool hostLost = flags.contains(QStringLiteral("-o"));
+                const bool ownerLost = flags.contains(QStringLiteral("-q"));
+                if (hostLost || ownerLost) {
+                    lostChannel = parse.args[1];
+                    lostNickname = parse.args.value(3);
+                    lostStatus = hostLost
+                        ? modeCacheHostLost : modeCacheOwnerLost;
+                } else {
+                    lostStatus = modeCacheNone;
+                }
+            }
+        } else {
+            const QString flags = parse.args[2];
+            const QString modeNickname = parse.args.value(3);
+            if (lostStatus != modeCacheNone
+                && lostChannel == parse.args[1]
+                && lostNickname == modeNickname) {
+                const bool display =
+                    (lostStatus == modeCacheHostLost
+                     && flags.contains(QStringLiteral("+q")))
+                    || (lostStatus == modeCacheOwnerLost
+                        && flags.contains(QStringLiteral("+o")))
+                    || (lostStatus == modeCacheOwnerLost
+                        && flags.contains(QStringLiteral("-o")));
+                ircPrint.SetFormat(display ? PT_OFFSET : PT_NONE,
+                                   line, RGB(0, 0, 0), 1, TRUE);
+                lostStatus = modeCacheNone;
+            } else {
+                ircPrint.SetFormat(PT_NONE);
             }
         }
         return;
@@ -1282,22 +2077,9 @@ void CIrcSocket::ProcessMessageBytes(const QByteArray& rawLine)
         return;
     }
 
-    if (parse.uCode == ERR_NOSUCHOBJECT && parse.nArgs >= 3) {
-        int queryIndex = -1;
-        CCQuery* query = m_queries.FindQuery(ctPropGet, &queryIndex);
-        if (query
-            && (query->GetQueryPurpose() == qpJoinPics
-                || query->GetQueryPurpose() == qpCreatePics)) {
-            // The source optionally continues through its PICS/rating policy
-            // and room-info store here. Neither subsystem is ported, so no
-            // successful join/create is synthesized; the completed query has
-            // the same lifetime as the original error path.
-            m_queries.FreeRemoveAt(queryIndex);
-        }
-        return;
-    }
-
     if (parse.uCode == RPL_CHANNELMODEIS && parse.args.size() >= 4) {
+        QString displayLine;
+        HandleResultCode(displayLine, line, &parse, &ircPrint);
         CChatDoc* doc = LookupDoc(parse.args[2]);
         if (doc) {
             int roomInfoIndex = -1;
@@ -1352,14 +2134,24 @@ void CIrcSocket::ProcessMessageBytes(const QByteArray& rawLine)
         && parse.bHasLastString) {
         CChatDoc* doc = LookupDoc(parse.args[1]);
         CSInString(&parse.lastString, parse.args[1], doc);
-        setRoomTopic(doc, parse.lastString);
+        CDWordArray formatting;
+        const QString controlLessTopic = setRoomTopic(
+            doc, parse.lastString, &formatting);
         int queryIndex = -1;
         if (CCQuery* query = m_queries.FindQuery(ctTopic, &queryIndex)) {
-            if (query->GetQueryPurpose() == qpSetTopic
-                && query->GetChannelName().compare(parse.args[1],
-                                                    Qt::CaseInsensitive) == 0) {
-                m_queries.FreeRemoveAt(queryIndex);
-            }
+            Q_UNUSED(query);
+            m_queries.FreeRemoveAt(queryIndex);
+            ircPrint.SetFormat(PT_NONE);
+        } else {
+            const QString statusLine = parse.args[1]
+                + QStringLiteral(" :") + controlLessTopic;
+            PushFormattingOffsets(
+                &formatting,
+                static_cast<SHORT>(parse.args[1].toUtf8().size() + 2));
+            ircPrint.SetFormat(PT_WHOLESTRING, statusLine,
+                               RGB(0, 0, 128), 0, TRUE);
+            AddToStatus(ircPrint, statusLine, &formatting);
+            ircPrint.SetFormat(PT_NONE);
         }
         return;
     }
@@ -1369,30 +2161,49 @@ void CIrcSocket::ProcessMessageBytes(const QByteArray& rawLine)
         if (parse.bHasLastString) {
             CSInString(&parse.lastString, parse.args[2], doc);
         }
-        setRoomTopic(doc, parse.lastString);
+        CDWordArray formatting;
+        const QString controlLessTopic = setRoomTopic(
+            doc, parse.lastString, &formatting);
         int queryIndex = -1;
-        if (CCQuery* query = m_queries.FindQuery(ctTopic, &queryIndex)) {
+        bool listMembers = false;
+        QString encodedRoom;
+        QString prettyRoom;
+        CCQuery* query = m_queries.FindQuery(ctTopic, &queryIndex);
+        if (query) {
             if (query->GetQueryPurpose() == qpListMembers
                 && query->GetChannelName().compare(parse.args[2],
                                                    Qt::CaseInsensitive) == 0) {
-                const QString encodedRoom = query->GetChannelName();
-                const QString prettyRoom = query->GetData()
+                encodedRoom = query->GetChannelName();
+                prettyRoom = query->GetData()
                     ? *static_cast<QString*>(query->GetData()) : QString();
-                m_queries.FreeRemoveAt(queryIndex);
-                ircPrint.SetFormat(PT_NONE);
-                OnUserListAux(QString(), encodedRoom, prettyRoom);
-                return;
+                listMembers = true;
             }
             if (query->GetQueryPurpose() == qpInitialTopic
                 && query->GetChannelName().compare(parse.args[2],
                                                    Qt::CaseInsensitive) == 0) {
-                m_queries.FreeRemoveAt(queryIndex);
+                ircPrint.SetFormat(PT_NONE);
             }
+            m_queries.FreeRemoveAt(queryIndex);
+            ircPrint.SetFormat(PT_NONE);
+        } else {
+            const QString statusLine = parse.args[2]
+                + QStringLiteral(" :") + controlLessTopic;
+            PushFormattingOffsets(
+                &formatting,
+                static_cast<SHORT>(parse.args[2].toUtf8().size() + 2));
+            ircPrint.SetFormat(PT_WHOLESTRING, statusLine,
+                               RGB(0, 0, 128), 0, TRUE);
+            AddToStatus(ircPrint, statusLine, &formatting);
+            ircPrint.SetFormat(PT_NONE);
         }
+        if (listMembers)
+            OnUserListAux(QString(), encodedRoom, prettyRoom);
         return;
     }
 
     if (parse.uCode == RPL_NOTOPIC && parse.args.size() >= 3) {
+        QString displayLine;
+        HandleResultCode(displayLine, line, &parse, &ircPrint);
         int queryIndex = -1;
         CCQuery* query = m_queries.FindQuery(ctTopic, &queryIndex);
         if (query && query->GetQueryPurpose() == qpListMembers
@@ -1409,6 +2220,8 @@ void CIrcSocket::ProcessMessageBytes(const QByteArray& rawLine)
     }
 
     if (parse.uCode == RPL_NAMEREPLY) {
+        QString displayLine;
+        HandleResultCode(displayLine, line, &parse, &ircPrint);
         int topicIndex = -1;
         if (CCQuery* topicQuery = m_queries.FindQuery(ctTopic, &topicIndex)) {
             if (topicQuery->GetQueryPurpose() == qpInitialTopic) {
@@ -1443,6 +2256,8 @@ void CIrcSocket::ProcessMessageBytes(const QByteArray& rawLine)
     }
 
     if (parse.uCode == RPL_ENDOFNAMES) {
+        QString displayLine;
+        HandleResultCode(displayLine, line, &parse, &ircPrint);
         int index = -1;
         bool initialEnumerationEnded = false;
         if (CCQuery* namesQuery = m_queries.FindQuery(ctNames, &index)) {
@@ -1464,14 +2279,16 @@ void CIrcSocket::ProcessMessageBytes(const QByteArray& rawLine)
     }
 
     if (parse.uCode == RPL_WHOREPLY && parse.args.size() >= 8) {
+        QString displayLine;
+        HandleResultCode(displayLine, line, &parse, &ircPrint);
         if (CCQuery* query = m_queries.FindQuery(ctWho)) {
             if (query->GetQueryPurpose() == qpOnConnectEvent
                 || query->GetQueryPurpose() == qpOnDisconnectEvent
                 || query->GetQueryPurpose() == qpOnNotification) {
                 PPRUSERMATCH match = query->GetPrUserMatch();
-                const QByteArray nickname = parse.args[6].toUtf8();
-                const QByteArray userName = parse.args[3].toUtf8();
-                const QByteArray hostName = parse.args[4].toUtf8();
+                const QByteArray nickname = parse.args[6].toLatin1();
+                const QByteArray userName = parse.args[3].toLatin1();
+                const QByteArray hostName = parse.args[4].toLatin1();
                 if (match && bIsMatch(match, nickname.constData(),
                                       userName.constData(),
                                       hostName.constData())) {
@@ -1510,6 +2327,8 @@ void CIrcSocket::ProcessMessageBytes(const QByteArray& rawLine)
     }
 
     if (parse.uCode == RPL_ENDOFWHO) {
+        QString displayLine;
+        HandleResultCode(displayLine, line, &parse, &ircPrint);
         int queryIndex = -1;
         if (CCQuery* query = m_queries.FindQuery(ctWho, &queryIndex)) {
             if (query->GetQueryPurpose() == qpOnConnectEvent
@@ -1571,11 +2390,13 @@ void CIrcSocket::ProcessMessageBytes(const QByteArray& rawLine)
                 if (theApp.m_pRoomList)
                     theApp.m_pRoomList->ReenableListMembers();
             }
+            return;
         }
-        return;
     }
 
-    if (parse.uCode == 311 && parse.args.size() >= 5) {
+    if (parse.uCode == RPL_WHOISUSER && parse.args.size() >= 5) {
+        QString displayLine;
+        HandleResultCode(displayLine, line, &parse, &ircPrint);
         CSInString(&parse.args[3]);
         CCQuery* query = m_queries.FindQuery(ctWhoIs);
         if (query
@@ -1650,7 +2471,9 @@ void CIrcSocket::ProcessMessageBytes(const QByteArray& rawLine)
         return;
     }
 
-    if (parse.uCode == 318 && parse.args.size() >= 3) {
+    if (parse.uCode == RPL_ENDOFWHOIS && parse.args.size() >= 3) {
+        QString displayLine;
+        HandleResultCode(displayLine, line, &parse, &ircPrint);
         int queryIndex = -1;
         if (CCQuery* query = m_queries.FindQuery(ctWhoIs, &queryIndex)) {
             if (query->GetNicknameMask().compare(parse.args[2],
@@ -1663,6 +2486,7 @@ void CIrcSocket::ProcessMessageBytes(const QByteArray& rawLine)
     }
 
     if (parse.command == QLatin1String("DATA") && parse.args.size() >= 3) {
+        ircPrint.SetFormat(PT_NONE);
         const QString target = parse.args[1];
         if (parse.bHasLastString && parse.lastString.startsWith(QLatin1Char('#'))
             && parse.args[2] == QLatin1String("CCUDI1")
@@ -1695,7 +2519,8 @@ void CIrcSocket::ProcessMessageBytes(const QByteArray& rawLine)
     if ((parse.command == QLatin1String("PRIVMSG")
          || parse.command == QLatin1String("NOTICE"))
         && parse.args.size() >= 2 && parse.bHasLastString) {
-        ircPrint.SetFormat(PT_NONE);
+        QString displayLine;
+        HandleCommand(displayLine, line, &parse, &ircPrint);
         if (!parse.nick.isEmpty() && !parse.user.isEmpty()) {
             const QString target = parse.args[1];
             CChatDoc* doc = nullptr;
@@ -1727,8 +2552,10 @@ void CIrcSocket::ProcessMessageBytes(const QByteArray& rawLine)
 
     if (parse.command == QLatin1String("NICK")) {
         ircPrint.SetFormat(PT_NONE);
-        QString newNick = parse.lastString;
-        if (newNick.isEmpty() && parse.args.size() >= 2) newNick = parse.args[1];
+        const bool displayNewNick =
+            parse.nick == QString::fromUtf8(GetMyNickName());
+        const QString newNick = parse.bHasLastString
+            ? parse.lastString : QString();
         if (!newNick.isEmpty()) {
             bool setName = false;
             for (CChatDoc* doc : g_docs) {
@@ -1742,6 +2569,14 @@ void CIrcSocket::ProcessMessageBytes(const QByteArray& rawLine)
                 }
             }
             if (!setName) SetMyNameNick(newNick);
+            if (displayNewNick) {
+                QString message = originalResourceString(
+                    QStringLiteral("IDS_NOWKNOWNAS"));
+                message.replace(QStringLiteral("%s"),
+                                QString::fromUtf8(GetMyScreenName()));
+                ircPrint.SetFormat(PT_WHOLESTRING, message,
+                                   RGB(0, 0, 255), 0, TRUE);
+            }
         }
         return;
     }
@@ -1751,9 +2586,7 @@ void CIrcSocket::ProcessMessageBytes(const QByteArray& rawLine)
         ircPrint.SetFormat(PT_NONE);
         CChatDoc* doc = LookupDoc(parse.args[1]);
         CSInString(&parse.lastString, parse.args[1], doc);
-        if (doc) {
-            OnKick(doc, parse.nick, parse.args[2], parse.lastString);
-        }
+        OnKick(doc, parse.nick, parse.args[2], parse.lastString);
         return;
     }
 
@@ -1761,11 +2594,11 @@ void CIrcSocket::ProcessMessageBytes(const QByteArray& rawLine)
         ircPrint.SetFormat(PT_NONE);
         CChatDoc* doc = parse.args.size() >= 2
             ? LookupDoc(parse.args[1]) : nullptr;
-        if (doc) {
-            if (parse.nick.compare(QString::fromUtf8(GetMyNickName()),
-                                   Qt::CaseInsensitive) == 0) {
-                GotPartChannel(doc);
-            } else {
+        if (parse.nick.compare(QString::fromUtf8(GetMyNickName()),
+                               Qt::CaseInsensitive) == 0) {
+            GotPartChannel(doc);
+            theApp.m_pExitingDoc = nullptr;
+        } else if (doc) {
                 enumActions actionIDs[2] = {
                     static_cast<enumActions>(1), aHighlightMessage
                 };
@@ -1787,27 +2620,31 @@ void CIrcSocket::ProcessMessageBytes(const QByteArray& rawLine)
                 theApp.m_dynaRules.bMatchAndApplyRules(
                     eOnLeave, nullptr, actionIDs, server, identity,
                     channel, eventMessage);
-            }
         }
         return;
     }
 
-    if (parse.command == QLatin1String("PROP")
-        && parse.nArgs == 3 && parse.bHasLastString
-        && channelPrefix(parse.args[1])) {
-        CChatDoc* doc = LookupDoc(parse.args[1]);
-        if (doc && doc->m_proto && doc->m_proto->IsIRCX()) {
-            if (parse.args[2] == QLatin1String("CLIENT")) {
-                int queryIndex = -1;
-                CCQuery* query = m_queries.FindQuery(ctPropSet, &queryIndex);
-                if (query && query->GetQueryPurpose() == qpSetClient) {
-                    m_queries.FreeRemoveAt(queryIndex);
+    if (parse.command == QLatin1String("PROP")) {
+        QString displayLine;
+        HandleCommand(displayLine, line, &parse, &ircPrint);
+        if (parse.nArgs == 3 && parse.bHasLastString
+            && channelPrefix(parse.args[1])) {
+            CChatDoc* doc = LookupDoc(parse.args[1]);
+            if (doc && doc->m_proto && doc->m_proto->IsIRCX()) {
+                if (parse.args[2] == QLatin1String("CLIENT")) {
+                    int queryIndex = -1;
+                    CCQuery* query = m_queries.FindQuery(ctPropSet,
+                                                        &queryIndex);
+                    if (query && query->GetQueryPurpose() == qpSetClient) {
+                        m_queries.FreeRemoveAt(queryIndex);
+                        ircPrint.SetFormat(PT_NONE);
+                    }
+                    doc->m_proto->HandleClientDataChange(parse.lastString);
                 }
-                doc->m_proto->HandleClientDataChange(parse.lastString);
-            }
-            if (parse.args[2] == QLatin1String("TOPIC")) {
-                CSInString(&parse.lastString, parse.args[1], doc);
-                setRoomTopic(doc, parse.lastString);
+                if (parse.args[2] == QLatin1String("TOPIC")) {
+                    CSInString(&parse.lastString, parse.args[1], doc);
+                    setRoomTopic(doc, parse.lastString);
+                }
             }
         }
         return;
@@ -1845,4 +2682,14 @@ void CIrcSocket::ProcessMessageBytes(const QByteArray& rawLine)
         return;
     }
 
+    QString displayLine;
+    if (parse.uCode) {
+        if (bIsErrorCode(parse.uCode)) {
+            HandleErrorCode(line, &parse, &ircPrint);
+        } else {
+            HandleResultCode(displayLine, line, &parse, &ircPrint);
+        }
+    } else {
+        HandleCommand(displayLine, line, &parse, &ircPrint);
+    }
 }

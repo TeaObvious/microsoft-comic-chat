@@ -18,6 +18,7 @@
 #include "avatario.h"
 
 #include <QApplication>
+#include <QAction>
 #include <QLabel>
 #include <QMenuBar>
 #include <QMdiArea>
@@ -296,6 +297,19 @@ int main(int argc, char** argv)
     CChatDoc document;
     SetChatDoc(&document);
     CMainFrame frame(&document);
+    frame.UpdateMacroMenu();
+
+    int comicFontActions = 0;
+    for (QAction* action : frame.findChildren<QAction*>()) {
+        if (action->data().toString() != QLatin1String("ID_SETFONT"))
+            continue;
+        ++comicFontActions;
+        if (!action->isEnabled()) {
+            qWarning() << "comic font command disabled";
+            return EXIT_FAILURE;
+        }
+    }
+    if (comicFontActions == 0) return EXIT_FAILURE;
 
     if (!frame.GetMDIArea()
         || frame.GetMDIArea()->subWindowList().size() != 1

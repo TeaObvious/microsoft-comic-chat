@@ -4,6 +4,7 @@
 
 #include <QApplication>
 #include <QImage>
+#include <QLocale>
 #include <QPainter>
 
 #include <iostream>
@@ -23,6 +24,33 @@ void check(bool condition, const char* message)
 int main(int argc, char** argv)
 {
     QApplication application(argc, argv);
+
+    const QLocale savedLocale;
+    QLocale::setDefault(QLocale(QLocale::English,
+                                QLocale::UnitedStates));
+    check(GetACP() == 1252,
+          "Western GetACP replacement differs from the source ACP");
+    SetMime(ANSI_CHARSET);
+    const QString euro = QStringLiteral("\u20ac");
+    check(IntlTextFromQString(QStringView(euro))
+                  == QByteArray::fromHex("80")
+              && IntlTextToQString(QByteArray::fromHex("80").constData(), 1)
+                  == euro,
+          "non-Far-East Windows-1252 text boundary differs from the source");
+    QLocale::setDefault(QLocale(QLocale::Polish, QLocale::Poland));
+    check(GetACP() == 1250,
+          "East-European GetACP replacement differs from the source ACP");
+    SetMime(EASTEUROPE_CHARSET);
+    const QString aOgonek = QStringLiteral("\u0104");
+    check(IntlTextFromQString(QStringView(aOgonek))
+                  == QByteArray::fromHex("a5")
+              && IntlTextToQString(QByteArray::fromHex("a5").constData(), 1)
+                  == aOgonek,
+          "non-Far-East Windows-1250 text boundary differs from the source");
+    QLocale::setDefault(QLocale(QLocale::Japanese, QLocale::Japan));
+    check(GetACP() == 932,
+          "Japanese GetACP replacement differs from the source ACP");
+    QLocale::setDefault(savedLocale);
 
     check(IsDBCSLeadByteEx(932, 0x81)
               && IsDBCSLeadByteEx(932, 0x9f)
@@ -73,14 +101,17 @@ int main(int argc, char** argv)
                              QByteArray::fromHex("a1a3").constData()),
           "CP936 punctuation tables differ from intl.c");
 
-    SetMime(ANSI_CHARSET);
-    check(GetMime() == nullptr && iBytesofChar(0x82) == 1,
-          "non-Far-East SetMime state differs from source");
+    QLocale::setDefault(QLocale(QLocale::English,
+                                QLocale::UnitedStates));
     SetMime(SHIFTJIS_CHARSET);
+    check(GetMime() == nullptr && iBytesofChar(0x82) == 1,
+          "SetMime must ignore its argument on a non-Far-East ACP");
+    QLocale::setDefault(QLocale(QLocale::Japanese, QLocale::Japan));
+    SetMime(ANSI_CHARSET);
     auto* mime = static_cast<SCRIPTINFO*>(GetMime());
     check(mime && mime->iCp == 932 && iBytesofChar(0x82) == 2
               && iBytesofChar('A') == 1,
-          "Shift-JIS SetMime selection differs from source table");
+          "SetMime must select the source table from ACP, not its argument");
 
     const QString hiragana = QStringLiteral("\u3042");
     const QByteArray native = IntlTextFromQString(QStringView(hiragana));
@@ -119,6 +150,7 @@ int main(int argc, char** argv)
               && (bytesFit % 2) == 0,
           "Far-East fitted substring is not on a source DBCS boundary");
 
-    SetMime(ANSI_CHARSET);
+    QLocale::setDefault(savedLocale);
+    SetMime(GetCorrectCharSet());
     return failures == 0 ? 0 : 1;
 }

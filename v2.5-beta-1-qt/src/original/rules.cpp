@@ -4,6 +4,7 @@
 
 #include "rules.h"
 
+#include "ccommon.h"
 #include "notif.h"
 #include "originalassets.h"
 #include "originalsettings.h"
@@ -771,7 +772,10 @@ void CCRule::SetEventParam(UINT index, const QString& parameter)
     m_rgstrEventParams[index] = parameter;
     if (m_pEvent && m_pEvent->m_rgpt[index] == ptNickname
         && m_rgkep[index] == kepMax) {
-        const QByteArray mask = parameter.toUtf8();
+        QByteArray mask;
+        if (!bWideToCodePage(QStringView(parameter), GetACP(), &mask)) {
+            mask = parameter.toLatin1();
+        }
         bGetUserMatchFromMask(mask.constData(), &m_prUserMatch);
     }
 }

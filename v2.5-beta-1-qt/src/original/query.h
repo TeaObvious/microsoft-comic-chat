@@ -77,6 +77,13 @@ public:
     ~CCQuery();
 
     void SetQueryPurpose(enumQueryPurpose qp) { m_qp = qp; }
+    void SetCommandType(enumCommandType ct) { m_ct = ct; }
+    void SetDataType(enumDataType dt) { m_dt = dt; }
+    void SetData(void* data) { m_pvData = data; }
+    void SetChannelName(const QString& channelName)
+        { m_strChannelName = channelName; }
+    void SetNicknameMask(const QString& nicknameMask)
+        { m_strNicknameMask = nicknameMask; }
     enumQueryPurpose GetQueryPurpose() const { return m_qp; }
     enumCommandType GetCommandType() const { return m_ct; }
     enumDataType GetDataType() const { return m_dt; }
@@ -103,7 +110,8 @@ public:
     void FreeRemoveAll();
     bool FreeRemoveAt(int index);
     CCQuery* RemoveAt(int index);
-    CCQuery* FindQuery(enumCommandType ct, int* index = nullptr);
+    CCQuery* FindQuery(enumCommandType ct, int* index = nullptr,
+                       LONG* rank = nullptr);
 
 private:
     QList<CCQuery*> m_queries;

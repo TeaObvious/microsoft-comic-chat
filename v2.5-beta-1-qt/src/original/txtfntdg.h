@@ -13,9 +13,9 @@
 #include <memory>
 
 class CTextCore;
+class CSourceSimpleCombo;
 class QCheckBox;
 class QComboBox;
-class QFontComboBox;
 class QTextEdit;
 class QShowEvent;
 
@@ -70,9 +70,9 @@ private:
     std::unique_ptr<CTextCore> m_richCore;
     QTextEdit* m_richPreview = nullptr;
     QComboBox* m_messageType = nullptr;
-    QFontComboBox* m_face = nullptr;
-    QComboBox* m_style = nullptr;
-    QComboBox* m_pointSize = nullptr;
+    CSourceSimpleCombo* m_face = nullptr;
+    CSourceSimpleCombo* m_style = nullptr;
+    CSourceSimpleCombo* m_pointSize = nullptr;
     QComboBox* m_color = nullptr;
     QComboBox* m_script = nullptr;
     QCheckBox* m_strikeout = nullptr;

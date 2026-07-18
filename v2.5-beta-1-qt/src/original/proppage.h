@@ -29,9 +29,11 @@ class QTextEdit;
 class CPersonalPage final : public QWidget {
 public:
     explicit CPersonalPage(QWidget* parent = nullptr);
+    ~CPersonalPage() override;
 
     QString nickname() const;
     QString realName() const;
+    void SetNickname(const QString& nickname);
     bool validate();
     void apply();
 
@@ -42,6 +44,8 @@ private:
     QLineEdit* m_homePage = nullptr;
     QTextEdit* m_profile = nullptr;
 };
+
+CPersonalPage* GetPersonalPage();
 
 class CCharacterPage final : public QWidget {
 public:
@@ -108,6 +112,32 @@ private:
 };
 
 void SetTextFont();
+
+class CComicsPropPage final : public QWidget {
+public:
+    explicit CComicsPropPage(QWidget* parent = nullptr);
+
+    void OnSetfont();
+    void OnResetfont();
+    void OnSelchangePanels();
+    void OnShowComicRTF();
+    void OnAutoDownloadChars();
+    void OnAutoDownloadBackdrops();
+    void apply();
+
+private:
+    QComboBox* m_comboPanels = nullptr;
+    QCheckBox* m_showComicRtf = nullptr;
+    QCheckBox* m_autoDownloadChars = nullptr;
+    QCheckBox* m_autoDownloadBackdrops = nullptr;
+    int m_nPanelsSel = 0;
+    BOOL m_bPanelClicked = FALSE;
+    BOOL m_bShowComicRTF = FALSE;
+    BOOL m_bAutoDownloadChars = FALSE;
+    BOOL m_bAutoDownloadBackdrops = FALSE;
+};
+
+void SetComicsFont();
 
 class CServersOnlyComboBox final : public QComboBox {
 public:

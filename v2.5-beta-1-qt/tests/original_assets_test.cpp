@@ -1,6 +1,8 @@
 #include "originalassets.h"
 
+#include <QCryptographicHash>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 
 #include <cstdlib>
@@ -27,6 +29,17 @@ bool checkDirectory(const QString& relativeDirectory, int expectedFileCount)
 int main()
 {
     if (originalAssetRoot().isEmpty()) {
+        return EXIT_FAILURE;
+    }
+    const QString comicFontPath = originalV1SharedPath(
+        QStringLiteral("comic.ttf"));
+    QFile comicFont(comicFontPath);
+    if (comicFontPath.isEmpty() || !comicFont.open(QIODevice::ReadOnly)
+        || comicFont.size() != 63040
+        || QCryptographicHash::hash(comicFont.readAll(),
+                                    QCryptographicHash::Sha256).toHex()
+            != QByteArrayLiteral(
+                "08e336a641ef44f0a6c745a52c64ba10ad58a8aad631e3db79c98cb703b9893f")) {
         return EXIT_FAILURE;
     }
     if (!checkDirectory(QStringLiteral("res"), 53)
@@ -66,7 +79,8 @@ int main()
     }
 
     if (!originalAssetPath(QStringLiteral("../source-overview.md")).isEmpty()
-        || !originalAssetPath(QStringLiteral("res/does-not-exist.bmp")).isEmpty()) {
+        || !originalAssetPath(QStringLiteral("res/does-not-exist.bmp")).isEmpty()
+        || !originalV1SharedPath(QStringLiteral("../comic.ttf")).isEmpty()) {
         return EXIT_FAILURE;
     }
     if (originalResourceString(QStringLiteral("ID_EM_HAPPY")) != QStringLiteral("Happy")

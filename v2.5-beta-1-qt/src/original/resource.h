@@ -44,6 +44,7 @@
 #define IDD_BAN                         200
 #define IDD_INVITE                      201
 #define IDD_TEXTFONTPAGE_IRC            224
+#define IDD_COMICS_VIEW                 1545
 #define IDR_TEXTTOOLBAR                 200
 #define IDR_USERTOOLBAR                 201
 #define IDR_NMUSERTOOLBAR               202
@@ -207,6 +208,11 @@
 #define IDS_ERR_RAWJOINCREATE           61239
 #define IDS_ERR_NOMOTD                  61241
 #define IDS_ERR_NOSUCHCHANNELANYMORE    61240
+#define IDS_BLANKNICK                   221
+#define ID_ERR_BAD_NICK                 63007
+#define ID_ERR_DUPED_NICK               63008
+#define ID_PASSWORD_PROMPT              63086
+#define IDS_BAD_PASSWORD                63143
 #define ID_ERR_BADCHANNELNAME           63082
 #define IDS_MUSTBE_CONNECTED            63099
 #define IDS_NOSLASH_COMMANDS            63101

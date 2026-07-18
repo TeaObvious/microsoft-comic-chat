@@ -10,6 +10,9 @@
 #include "defines.h"
 #include "ircproto.h"
 #include "originalassets.h"
+#include "pageview.h"
+#include "panel.h"
+#include "saywnd.h"
 #include "setupdlg.h"
 #include "textview.h"
 #include "txtfntdg.h"
@@ -21,6 +24,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFormLayout>
+#include <QFontDialog>
+#include <QFontInfo>
 #include <QFontMetrics>
 #include <QFrame>
 #include <QGridLayout>
@@ -46,6 +51,8 @@
 #include <memory>
 
 namespace {
+CPersonalPage* g_personalPage = nullptr;
+
 QString decodedCopyright(const char* copyrightText, const QString& defaultResource)
 {
     if (!copyrightText || !*copyrightText) {
@@ -95,6 +102,7 @@ CPersonalPage::CPersonalPage(QWidget* parent)
     , m_homePage(new QLineEdit(this))
     , m_profile(new QTextEdit(this))
 {
+    g_personalPage = this;
     m_realName->setText(QString::fromUtf8(GetMyRealName()));
     m_nickname->setText(QString::fromUtf8(GetMyName()));
     m_email->setText(QString::fromUtf8(GetMyEmail()));
@@ -132,6 +140,16 @@ CPersonalPage::CPersonalPage(QWidget* parent)
                        QStringLiteral("IDC_STATIC"), 4), m_profile);
 }
 
+CPersonalPage::~CPersonalPage()
+{
+    if (g_personalPage == this) g_personalPage = nullptr;
+}
+
+CPersonalPage* GetPersonalPage()
+{
+    return g_personalPage;
+}
+
 QString CPersonalPage::nickname() const
 {
     QString value = m_nickname->text();
@@ -139,6 +157,11 @@ QString CPersonalPage::nickname() const
 }
 
 QString CPersonalPage::realName() const { return m_realName->text(); }
+
+void CPersonalPage::SetNickname(const QString& nickname)
+{
+    m_nickname->setText(nickname);
+}
 
 bool CPersonalPage::validate()
 {
@@ -659,6 +682,212 @@ void SetTextFont()
     if (CChatDoc* document = GetChatDoc()) document->SetFocusToSayWnd();
     InitializeTextCores(FALSE, TRUE);
     InitializeWhisperCores(FALSE);
+}
+
+// -----------------------------------------------------------------------------
+// CComicsPropPage and the common Comic Font command
+
+namespace {
+
+int comicPointSize(const QFont& logicalFont)
+{
+    if (logicalFont.pixelSize() > 0)
+        return qBound(8, qRound(logicalFont.pixelSize() / 20.0), 18);
+    if (logicalFont.pointSizeF() > 0.0)
+        return qBound(8, qRound(logicalFont.pointSizeF()), 18);
+    return qBound(8, originalResourceString(
+        QStringLiteral("IDS_DFLT_COMICSPNTSIZE")).toInt(), 18);
+}
+
+QFont comicDialogFont(const QFont& logicalFont)
+{
+    QFont dialogFont(logicalFont);
+    const QString physicalFaceName = QFontInfo(logicalFont).family();
+    if (!physicalFaceName.isEmpty()) dialogFont.setFamily(physicalFaceName);
+    dialogFont.setPointSize(comicPointSize(logicalFont));
+    return dialogFont;
+}
+
+QFont comicLogicalFont(const QFont& dialogFont)
+{
+    QFont logicalFont(dialogFont);
+    qreal pointSize = dialogFont.pointSizeF();
+    if (pointSize <= 0.0 && dialogFont.pixelSize() > 0)
+        pointSize = dialogFont.pixelSize() / 20.0;
+    if (pointSize <= 0.0)
+        pointSize = originalResourceString(
+            QStringLiteral("IDS_DFLT_COMICSPNTSIZE")).toInt();
+    const int constrainedPointSize = qBound(8, qRound(pointSize), 18);
+    // Comic drawing uses the original MM_TWIPS coordinate domain. QFont's
+    // logical pixel size therefore carries the source LOGFONT twips height.
+    logicalFont.setPixelSize(constrainedPointSize * 20);
+    return logicalFont;
+}
+
+} // namespace
+
+void SetComicsFont()
+{
+    QFontDialog dialog(comicDialogFont(theApp.m_comicsFont),
+                       QApplication::activeWindow());
+    // The Qt dialog keeps the application's fixed Windows 98 palette. The
+    // host-native Linux dialog would leave that replacement boundary.
+    dialog.setOption(QFontDialog::DontUseNativeDialog, true);
+
+    if (dialog.exec() == QDialog::Accepted) {
+        QFont selected = comicLogicalFont(dialog.selectedFont());
+        CUnitPanelPage::SetFonts(selected, theApp.m_comicsColor);
+        if (CSayWnd* say = GetSay()) say->SetFont(selected, TRUE);
+    }
+
+    if (CChatDoc* document = GetChatDoc()) document->SetFocusToSayWnd();
+}
+
+CComicsPropPage::CComicsPropPage(QWidget* parent)
+    : QWidget(parent)
+{
+    const QString resourceName = QStringLiteral("IDD_COMICS_VIEW");
+    const OriginalDialogResource dialog = originalDialogResource(resourceName);
+    const QFont dialogFont = serverPageFont(dialog);
+    const ServerPageDluMapper mapper(dialogFont);
+    setFont(dialogFont);
+    setObjectName(resourceName);
+    setFixedSize(mapper.x(dialog.width), mapper.y(dialog.height));
+
+    m_bShowComicRTF = (theApp.m_flags1 & F1_RTFCOMIC) != 0;
+    m_bAutoDownloadChars = theApp.m_bAutoDownloadAvatars;
+    m_bAutoDownloadBackdrops = theApp.m_bAutoDownloadBackdrops;
+    m_nPanelsSel = qBound(0,
+        CUnitPanelPage::GetUnitPanelsPerRow() - 1, 3);
+
+    int staticOccurrence = 0;
+    for (const OriginalDialogControl& control : dialog.controls) {
+        if (control.identifier != QLatin1String("IDC_STATIC")) continue;
+        auto* label = new QLabel(control.text, this);
+        label->setWordWrap(control.height > 10);
+        placeServerPageControl(label, dialog, mapper,
+                               QStringLiteral("IDC_STATIC"),
+                               staticOccurrence++);
+    }
+
+    for (const QString& identifier : {
+             QStringLiteral("IDC_GROUP0"),
+             QStringLiteral("IDC_GROUP1"),
+             QStringLiteral("IDC_GROUP2")}) {
+        auto* group = new QGroupBox(originalDialogControlText(
+            resourceName, identifier), this);
+        placeServerPageControl(group, dialog, mapper, identifier);
+    }
+
+    auto* setFont = new QPushButton(originalDialogControlText(
+        resourceName, QStringLiteral("ID_SETFONT")), this);
+    placeServerPageControl(setFont, dialog, mapper,
+                           QStringLiteral("ID_SETFONT"));
+    auto* resetFont = new QPushButton(originalDialogControlText(
+        resourceName, QStringLiteral("ID_RESET_TEXTFONTS")), this);
+    placeServerPageControl(resetFont, dialog, mapper,
+                           QStringLiteral("ID_RESET_TEXTFONTS"));
+
+    m_showComicRtf = new QCheckBox(originalDialogControlText(
+        resourceName, QStringLiteral("IDC_SHOWCOMICRTF")), this);
+    m_showComicRtf->setChecked(m_bShowComicRTF);
+    placeServerPageControl(m_showComicRtf, dialog, mapper,
+                           QStringLiteral("IDC_SHOWCOMICRTF"));
+
+    m_comboPanels = new QComboBox(this);
+    for (const QString& identifier : {
+             QStringLiteral("IDS_1_WIDE"),
+             QStringLiteral("IDS_2_WIDE"),
+             QStringLiteral("IDS_3_WIDE"),
+             QStringLiteral("IDS_4_WIDE")}) {
+        m_comboPanels->addItem(originalResourceString(identifier));
+    }
+    m_comboPanels->setCurrentIndex(m_nPanelsSel);
+    placeServerPageControl(m_comboPanels, dialog, mapper,
+                           QStringLiteral("IDC_PANELS"));
+
+    m_autoDownloadChars = new QCheckBox(originalDialogControlText(
+        resourceName, QStringLiteral("IDC_AUTODOWNLOAD_CHARS")), this);
+    m_autoDownloadChars->setChecked(m_bAutoDownloadChars);
+    placeServerPageControl(m_autoDownloadChars, dialog, mapper,
+                           QStringLiteral("IDC_AUTODOWNLOAD_CHARS"));
+    m_autoDownloadBackdrops = new QCheckBox(originalDialogControlText(
+        resourceName, QStringLiteral("IDC_AUTODOWNLOAD_BACKDROPS")), this);
+    m_autoDownloadBackdrops->setChecked(m_bAutoDownloadBackdrops);
+    placeServerPageControl(m_autoDownloadBackdrops, dialog, mapper,
+                           QStringLiteral("IDC_AUTODOWNLOAD_BACKDROPS"));
+
+    connect(setFont, &QPushButton::clicked,
+            this, &CComicsPropPage::OnSetfont);
+    connect(resetFont, &QPushButton::clicked,
+            this, &CComicsPropPage::OnResetfont);
+    connect(m_comboPanels, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [this](int) { OnSelchangePanels(); });
+    connect(m_showComicRtf, &QCheckBox::clicked,
+            this, &CComicsPropPage::OnShowComicRTF);
+    connect(m_autoDownloadChars, &QCheckBox::clicked,
+            this, &CComicsPropPage::OnAutoDownloadChars);
+    connect(m_autoDownloadBackdrops, &QCheckBox::clicked,
+            this, &CComicsPropPage::OnAutoDownloadBackdrops);
+}
+
+void CComicsPropPage::OnSetfont()
+{
+    SetComicsFont();
+}
+
+void CComicsPropPage::OnResetfont()
+{
+    theApp.InitializeComicsFonts();
+    CUnitPanelPage::SetFonts(theApp.m_comicsFont, theApp.m_comicsColor);
+    if (CSayWnd* say = GetSay()) say->SetFont(theApp.m_comicsFont);
+}
+
+void CComicsPropPage::OnSelchangePanels()
+{
+    m_nPanelsSel = m_comboPanels->currentIndex();
+    m_bPanelClicked = TRUE;
+}
+
+void CComicsPropPage::OnShowComicRTF()
+{
+    m_bShowComicRTF = m_showComicRtf->isChecked();
+}
+
+void CComicsPropPage::OnAutoDownloadChars()
+{
+    m_bAutoDownloadChars = m_autoDownloadChars->isChecked();
+}
+
+void CComicsPropPage::OnAutoDownloadBackdrops()
+{
+    m_bAutoDownloadBackdrops = m_autoDownloadBackdrops->isChecked();
+}
+
+void CComicsPropPage::apply()
+{
+    if (m_bPanelClicked) {
+        const int panelsWide = m_nPanelsSel + 1;
+        int smallestPanelWidth = 9999;
+        for (CChatDoc* document : g_docs) {
+            if (document && document->m_bComicView
+                && !document->m_bObscured && document->m_view) {
+                smallestPanelWidth = std::min(smallestPanelWidth,
+                    document->m_view->GetProspectivePanelWidth(panelsWide));
+            }
+        }
+        for (CChatDoc* document : g_docs) {
+            if (document && document->m_bComicView && document->m_view)
+                document->m_view->SetPanelsWide(
+                    panelsWide, smallestPanelWidth);
+        }
+        m_bPanelClicked = FALSE;
+    }
+
+    if (m_bShowComicRTF) theApp.m_flags1 |= F1_RTFCOMIC;
+    else theApp.m_flags1 &= ~DWORD(F1_RTFCOMIC);
+    theApp.m_bAutoDownloadAvatars = m_bAutoDownloadChars;
+    theApp.m_bAutoDownloadBackdrops = m_bAutoDownloadBackdrops;
 }
 
 QString CServersPage::sm_strUnassociatedGroup;
@@ -1270,6 +1499,8 @@ void COptionsDialog::build(BOOL comicsMode, UINT initialPageId)
     setWindowTitle(originalResourceString(QStringLiteral("IDS_OPTIONS")));
     auto* tabs = new QTabWidget(this);
     auto* personal = new CPersonalPage(tabs);
+    CComicsPropPage* comics = comicsMode
+        ? new CComicsPropPage(tabs) : nullptr;
     auto* character = new CCharacterPage(tabs);
     auto* background = new CBackgroundPage(tabs);
     CTextFontPage* textFont = comicsMode
@@ -1278,6 +1509,8 @@ void COptionsDialog::build(BOOL comicsMode, UINT initialPageId)
     tabs->addTab(personal, originalDialogCaption(
         QStringLiteral("IDD_PERSONALPAGE_IRC")));
     if (comicsMode) {
+        tabs->addTab(comics, originalDialogCaption(
+            QStringLiteral("IDD_COMICS_VIEW")));
         tabs->addTab(character, originalDialogCaption(
             QStringLiteral("IDD_CHARACTERPAGE")));
         tabs->addTab(background, originalDialogCaption(
@@ -1291,6 +1524,8 @@ void COptionsDialog::build(BOOL comicsMode, UINT initialPageId)
 
     if (initialPageId == IDD_PERSONALPAGE_IRC)
         tabs->setCurrentWidget(personal);
+    else if (initialPageId == IDD_COMICS_VIEW && comicsMode)
+        tabs->setCurrentWidget(comics);
     else if (initialPageId == IDD_CHARACTERPAGE && comicsMode)
         tabs->setCurrentWidget(character);
     else if (initialPageId == IDD_BACKGROUNDPAGE && comicsMode)
@@ -1303,7 +1538,7 @@ void COptionsDialog::build(BOOL comicsMode, UINT initialPageId)
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
                                          this);
     connect(buttons, &QDialogButtonBox::accepted, this,
-            [this, tabs, personal, character, background,
+            [this, tabs, personal, comics, character, background,
              textFont, servers, comicsMode] {
         if (!personal->validate()) return;
         if (!servers->validate()) {
@@ -1312,6 +1547,7 @@ void COptionsDialog::build(BOOL comicsMode, UINT initialPageId)
         }
         personal->apply();
         if (comicsMode) {
+            comics->apply();
             character->apply();
             background->apply();
         } else if (textFont) {

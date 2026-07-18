@@ -47,6 +47,7 @@ void GetVersionString(QString& version)
 
 void CChatApp::InitializeComicsFonts()
 {
+    registerOriginalComicFont();
     const int pointSize = originalResourceString(
         QStringLiteral("IDS_DFLT_COMICSPNTSIZE")).toInt();
     m_iFontHeightBalloon = -pointSize * 20;

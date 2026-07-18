@@ -7,9 +7,17 @@
 #include <QTemporaryDir>
 
 #include <array>
-#include <cassert>
+#include <cstdio>
+#include <cstdlib>
 
 namespace {
+[[noreturn]] void fail(int line)
+{
+    std::fprintf(stderr, "require failed at line %d\n", line);
+    std::abort();
+}
+#define REQUIRE(condition) do { if (!(condition)) fail(__LINE__); } while (false)
+
 QList<enumActions> executed;
 int failures = 0;
 QString eventKeyValue;
@@ -51,14 +59,14 @@ QString getActionKey(enumKeyActionParam key, QString& server,
 BOOL execute(CCDynaRules* dynaRules, CCRule* rule,
              CCActionContext* context)
 {
-    assert(context);
+    REQUIRE(context);
     executed.append(context->GetActionID());
     if (context->GetActionID() == aDoNotDisplay && dynaRules) {
         dynaRules->AddFlag(g_wDoNotDisplay);
     } else if (context->GetActionID() == aHighlightMessage && dynaRules) {
         dynaRules->AddFlag(g_wHighlight);
     } else if (context->GetActionID() == aReplaceMessage) {
-        assert(dynaRules && rule);
+        REQUIRE(dynaRules && rule);
         return dynaRules->bReplaceMessage(rule);
     } else if (context->GetActionID() == aSendMessage) {
         finalMessage = context->GetFinalActionParam(1);
@@ -70,7 +78,7 @@ BOOL execute(CCDynaRules* dynaRules, CCRule* rule,
 
 BOOL failure(CCRuleSet*, CCRule*, UINT error)
 {
-    assert(error == g_uErrFlooding);
+    REQUIRE(error == g_uErrFlooding);
     ++failures;
     return TRUE;
 }
@@ -124,40 +132,40 @@ int main(int argc, char** argv)
     QCoreApplication application(argc, argv);
 
     CCRulesData data;
-    assert(data.bInitAlloc());
-    assert(data.bLoadStrings());
-    assert(data.GetEvent(eOnMessage)->GetParamNum() == 3);
-    assert(data.GetEvent(eOnMessage)->GetLongDesc()
+    REQUIRE(data.bInitAlloc());
+    REQUIRE(data.bLoadStrings());
+    REQUIRE(data.GetEvent(eOnMessage)->GetParamNum() == 3);
+    REQUIRE(data.GetEvent(eOnMessage)->GetLongDesc()
            == originalResourceString(QStringLiteral("IDS_EVENT_LONG_DESC6")));
-    assert(data.GetAction(aSendMessage)->GetParamNum() == 2);
-    assert(data.GetKeyActionParam(kapEventMessage)
+    REQUIRE(data.GetAction(aSendMessage)->GetParamNum() == 2);
+    REQUIRE(data.GetKeyActionParam(kapEventMessage)
            == originalResourceString(QStringLiteral("IDS_KEY_ACTION_PARAM2")));
 
     CCDynaRules resourceRules;
     CCDelayedRules resourceDelayed;
     bind(resourceRules, data, resourceDelayed);
-    assert(resourceRules.bLoadRulesFromResource());
-    assert(resourceRules.GetRuleSetsArray().size() == 2);
+    REQUIRE(resourceRules.bLoadRulesFromResource());
+    REQUIRE(resourceRules.GetRuleSetsArray().size() == 2);
     CCRuleSet* samples = resourceRules.GetRuleSetFromName(
         setName(QStringLiteral("IDS_SAMPLES_RULESET")));
     CCRuleSet* general = resourceRules.GetRuleSetFromName(
         setName(QStringLiteral("IDS_GENERAL_RULESET")));
-    assert(samples && !samples->bActive());
-    assert(samples->GetRulesArray().size() == 7);
-    assert(general && general->bActive());
-    assert(general->GetRulesArray().isEmpty());
+    REQUIRE(samples && !samples->bActive());
+    REQUIRE(samples->GetRulesArray().size() == 7);
+    REQUIRE(general && general->bActive());
+    REQUIRE(general->GetRulesArray().isEmpty());
 
     std::array<char, g_uMaxSerializedRule> serialized{};
     CCRule* sourceRule = samples->GetRulesArray().at(6);
     const INT serializedLength = sourceRule->Serialize(
         serialized.data(), serialized.size());
-    assert(serializedLength > static_cast<INT>(g_uRuleFixedPrefix));
+    REQUIRE(serializedLength > static_cast<INT>(g_uRuleFixedPrefix));
     CCRule restored(&resourceRules);
-    assert(restored.UnSerialize(
+    REQUIRE(restored.UnSerialize(
                reinterpret_cast<const BYTE*>(serialized.data()),
                serializedLength) == serializedLength);
-    assert(restored.StrGetEventDisplay() == sourceRule->StrGetEventDisplay());
-    assert(restored.StrGetActionDisplay() == sourceRule->StrGetActionDisplay());
+    REQUIRE(restored.StrGetEventDisplay() == sourceRule->StrGetEventDisplay());
+    REQUIRE(restored.StrGetActionDisplay() == sourceRule->StrGetActionDisplay());
 
     CCDynaRules orderedRules;
     CCDelayedRules orderedDelayed;
@@ -184,14 +192,14 @@ int main(int argc, char** argv)
         static_cast<enumActions>(1), aHighlightMessage
     };
     executed.clear();
-    assert(orderedRules.bMatchAndApplyRules(
+    REQUIRE(orderedRules.bMatchAndApplyRules(
         eOnMessage, approved, nullptr, empty, empty, empty, empty));
-    assert(executed.isEmpty());
+    REQUIRE(executed.isEmpty());
     filteredStop->SetFlags(g_wActive);
-    assert(orderedRules.bMatchAndApplyRules(
+    REQUIRE(orderedRules.bMatchAndApplyRules(
         eOnMessage, approved, nullptr, empty, empty, empty, empty));
-    assert(executed == QList<enumActions>{aHighlightMessage});
-    assert(orderedRules.GetFlags() & g_wHighlight);
+    REQUIRE(executed == QList<enumActions>{aHighlightMessage});
+    REQUIRE(orderedRules.GetFlags() & g_wHighlight);
 
     CCDynaRules formattedRules;
     CCDelayedRules formattedDelayed;
@@ -216,12 +224,12 @@ int main(int argc, char** argv)
     QString formattedInput = QString::fromUtf8(full);
     delete[] full;
     executed.clear();
-    assert(formattedRules.bMatchAndApplyRules(
+    REQUIRE(formattedRules.bMatchAndApplyRules(
         eOnMessage, nullptr, nullptr, empty, empty, empty, formattedInput));
-    assert(executed == QList<enumActions>{aSendMessage});
-    assert(finalMessage == data.GetKeyActionParam(kapEventMessage));
-    assert(finalFormatting && finalFormatting->GetSize() == 1);
-    assert(LOWORD(finalFormatting->GetAt(0)) & wBold);
+    REQUIRE(executed == QList<enumActions>{aSendMessage});
+    REQUIRE(finalMessage == data.GetKeyActionParam(kapEventMessage));
+    REQUIRE(finalFormatting && finalFormatting->GetSize() == 1);
+    REQUIRE(LOWORD(finalFormatting->GetAt(0)) & wBold);
 
     CCDynaRules replaceRules;
     CCDelayedRules replaceDelayed;
@@ -242,11 +250,11 @@ int main(int argc, char** argv)
     replaceRules.bAddRuleSet(replaceSet);
     QString replaceInput = replaceWhat;
     executed.clear();
-    assert(replaceRules.bMatchAndApplyRules(
+    REQUIRE(replaceRules.bMatchAndApplyRules(
         eOnMessage, nullptr, nullptr, empty, empty, empty, replaceInput));
-    assert(executed == QList<enumActions>{aReplaceMessage});
-    assert(replaceRules.GetFlags() & g_wReplace);
-    assert(replaceRules.GetCFFinalMessage() == eventKeyValue);
+    REQUIRE(executed == QList<enumActions>{aReplaceMessage});
+    REQUIRE(replaceRules.GetFlags() & g_wReplace);
+    REQUIRE(replaceRules.GetCFFinalMessage() == eventKeyValue);
 
     replaceRules.SetFloodParams(g_uDefRuleFloodInt, 1);
     failures = 0;
@@ -255,8 +263,8 @@ int main(int argc, char** argv)
         eOnMessage, nullptr, nullptr, empty, empty, empty, replaceInput);
     replaceRules.bMatchAndApplyRules(
         eOnMessage, nullptr, nullptr, empty, empty, empty, replaceInput);
-    assert(replaceRule->bStopped());
-    assert(failures == 1);
+    REQUIRE(replaceRule->bStopped());
+    REQUIRE(failures == 1);
 
     CCDynaRules delayedRules;
     CCDelayedRules delayed;
@@ -269,33 +277,32 @@ int main(int argc, char** argv)
     delayedSet->bAddRule(delayedRule);
     delayedRules.bAddRuleSet(delayedSet);
     executed.clear();
-    assert(delayedRules.bMatchAndApplyRules(
+    REQUIRE(delayedRules.bMatchAndApplyRules(
         eOnMessage, nullptr, nullptr, empty, empty, empty, empty));
-    assert(executed.isEmpty() && delayed.GetCount() == 1);
+    REQUIRE(executed.isEmpty() && delayed.GetCount() == 1);
     delayed.bExecuteActions();
-    assert(executed.isEmpty() && delayed.GetCount() == 1);
+    REQUIRE(executed.isEmpty() && delayed.GetCount() == 1);
     delayed.bExecuteActions();
-    assert(executed == QList<enumActions>{aDoNotDisplay});
-    assert(delayed.GetCount() == 0);
+    REQUIRE(executed == QList<enumActions>{aDoNotDisplay});
+    REQUIRE(delayed.GetCount() == 0);
 
     QTemporaryDir directory;
-    assert(directory.isValid());
+    REQUIRE(directory.isValid());
     const QString fileName = directory.filePath(QStringLiteral("rules.crs"));
     UINT error = 0;
-    assert(formattedSet->bSaveToFile(fileName, &error));
-    assert(error == 0);
+    REQUIRE(formattedSet->bSaveToFile(fileName, &error));
+    REQUIRE(error == 0);
     CCDynaRules fileRules;
     CCDelayedRules fileDelayed;
     bind(fileRules, data, fileDelayed);
     CCRuleSet loaded(&fileRules);
-    assert(loaded.bLoadFromFile(fileName, &error));
-    assert(error == 0);
-    assert(loaded.GetName() == formattedSet->GetName());
-    assert(loaded.GetRulesArray().size() == 1);
-    assert(loaded.GetRulesArray().front()->StrGetActionDisplay()
+    REQUIRE(loaded.bLoadFromFile(fileName, &error));
+    REQUIRE(error == 0);
+    REQUIRE(loaded.GetName() == formattedSet->GetName());
+    REQUIRE(loaded.GetRulesArray().size() == 1);
+    REQUIRE(loaded.GetRulesArray().front()->StrGetActionDisplay()
            == formattedRule->StrGetActionDisplay());
 
     FreeAndNullFormatting(&finalFormatting);
     return 0;
 }
-

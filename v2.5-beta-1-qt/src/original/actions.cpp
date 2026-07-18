@@ -6,6 +6,7 @@
 
 #include "chat.h"
 #include "chatdoc.h"
+#include "ccommon.h"
 #include "ircproto.h"
 #include "ircsock.h"
 #include "mainfrm.h"
@@ -32,6 +33,15 @@
 
 namespace {
 QPointer<CNotificationUsers> g_notificationBox;
+
+QByteArray sourceAcpBytes(QStringView text)
+{
+    QByteArray bytes;
+    if (!bWideToCodePage(text, GetACP(), &bytes)) {
+        bytes = text.toString().toLatin1();
+    }
+    return bytes;
+}
 
 QRect makeRectVisibleOnScreen(QRect rect)
 {
@@ -324,13 +334,14 @@ BOOL bRndEventParam(QString& value, QString& filter,
         }
         if (userMatch && !decodedNickname.isEmpty() && !userName.isEmpty()
             && !hostName.isEmpty()) {
-            QByteArray nick = decodedNickname.toUtf8();
-            const QByteArray user = userName.toUtf8();
-            const QByteArray host = hostName.toUtf8();
+            QByteArray nick = sourceAcpBytes(QStringView(decodedNickname));
+            const QByteArray user = sourceAcpBytes(QStringView(userName));
+            const QByteArray host = sourceAcpBytes(QStringView(hostName));
             BOOL result = bIsMatch(userMatch, nick.constData(),
                                    user.constData(), host.constData());
             if (!result && bang >= 0) {
-                nick = DecodeNick(value.left(bang)).toUtf8();
+                nick = sourceAcpBytes(QStringView(
+                    DecodeNick(value.left(bang))));
                 result = bIsMatch(userMatch, nick.constData(),
                                   user.constData(), host.constData());
             }

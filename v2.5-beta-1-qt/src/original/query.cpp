@@ -2,6 +2,7 @@
 
 #include "query.h"
 
+#include "ccommon.h"
 #include "notif.h"
 #include "rules.h"
 
@@ -22,7 +23,11 @@ CCQuery::CCQuery(enumQueryPurpose qp, enumCommandType ct, enumDataType dt, void*
     }
     if (createPrUserMatch && !m_strNicknameMask.isEmpty()) {
         m_pPrUserMatch = new PRUSERMATCH;
-        const QByteArray mask = m_strNicknameMask.toUtf8();
+        QByteArray mask;
+        if (!bWideToCodePage(QStringView(m_strNicknameMask), GetACP(),
+                             &mask)) {
+            mask = m_strNicknameMask.toLatin1();
+        }
         bGetUserMatchFromMask(mask.constData(), m_pPrUserMatch);
     }
 }
@@ -72,15 +77,21 @@ CCQuery* CQueryPtrList::RemoveAt(int index)
     return m_queries.takeAt(index);
 }
 
-CCQuery* CQueryPtrList::FindQuery(enumCommandType ct, int* index)
+CCQuery* CQueryPtrList::FindQuery(enumCommandType ct, int* index, LONG* rank)
 {
     if (index) {
         *index = -1;
+    }
+    if (rank) {
+        *rank = 0;
     }
     for (int i = 0; i < m_queries.size(); ++i) {
         if (m_queries[i]->GetCommandType() == ct) {
             if (index) {
                 *index = i;
+            }
+            if (rank) {
+                *rank = static_cast<LONG>(i + 1);
             }
             return m_queries[i];
         }

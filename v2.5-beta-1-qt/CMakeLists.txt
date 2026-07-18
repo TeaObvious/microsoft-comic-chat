@@ -51,6 +51,23 @@ if(NOT EXISTS "${COMIC_CHAT_ARTIFACTS_ROOT}/inc/textview.h"
     )
 endif()
 
+set(COMIC_CHAT_V1_SHARED_ROOT
+    "${CMAKE_CURRENT_SOURCE_DIR}/../v1.0/shared"
+    CACHE PATH
+    "Path to the source-backed v1.0 shared files"
+)
+get_filename_component(COMIC_CHAT_V1_SHARED_ROOT
+    "${COMIC_CHAT_V1_SHARED_ROOT}"
+    REALPATH
+    BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+if(NOT EXISTS "${COMIC_CHAT_V1_SHARED_ROOT}/comic.ttf")
+    message(FATAL_ERROR
+        "COMIC_CHAT_V1_SHARED_ROOT must contain the tracked comic.ttf: "
+        "${COMIC_CHAT_V1_SHARED_ROOT}"
+    )
+endif()
+
 set(COMIC_CHAT_PORT_SOURCES
     src/original/chat.cpp
     src/original/mainfrm.cpp
@@ -116,6 +133,7 @@ set(COMIC_CHAT_PORT_SOURCES
     src/original/userlist.cpp
     src/original/whisprbx.cpp
     src/qt/win98palette.cpp
+    src/qt/wincompat.cpp
     src/qt/originalassets.cpp
     src/qt/originalsettings.cpp
 )
@@ -141,6 +159,7 @@ target_compile_definitions(comic-chat-core PRIVATE
     COMIC_CHAT_NO_MAIN
     COMIC_CHAT_ORIGINAL_ROOT="${COMIC_CHAT_ORIGINAL_ROOT}"
     COMIC_CHAT_ARTIFACTS_ROOT="${COMIC_CHAT_ARTIFACTS_ROOT}"
+    COMIC_CHAT_V1_SHARED_ROOT="${COMIC_CHAT_V1_SHARED_ROOT}"
 )
 
 target_link_libraries(comic-chat-core PUBLIC
@@ -167,437 +186,228 @@ set_target_properties(comic-chat-qt PROPERTIES
 )
 
 if(BUILD_TESTING)
-    add_executable(original-rules-test
-        tests/original_rules_test.cpp
-    )
-    target_link_libraries(original-rules-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-rules COMMAND original-rules-test)
-
-    add_executable(original-ccomp-test
-        tests/original_ccomp_test.cpp
-    )
-    target_link_libraries(original-ccomp-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-ccomp COMMAND original-ccomp-test)
-
-    add_executable(original-ccommon-test
+    set(original_irc_suite_sources
         tests/original_ccommon_test.cpp
-    )
-    target_link_libraries(original-ccommon-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-ccommon COMMAND original-ccommon-test)
-
-    add_executable(original-jis-conversion-test
         tests/original_jis_conversion_test.cpp
-    )
-    target_link_libraries(original-jis-conversion-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-jis-conversion COMMAND original-jis-conversion-test)
-
-    add_executable(original-intl-test
         tests/original_intl_test.cpp
-    )
-    target_link_libraries(original-intl-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-intl COMMAND original-intl-test)
-    set_tests_properties(original-intl PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-    )
-
-    add_executable(original-constants-test
-        tests/original_constants_test.cpp
-    )
-    target_include_directories(original-constants-test PRIVATE
-        src/original
-    )
-    add_test(NAME original-constants COMMAND original-constants-test)
-
-    add_executable(original-assets-test
-        tests/original_assets_test.cpp
-        src/qt/originalassets.cpp
-    )
-    target_include_directories(original-assets-test PRIVATE
-        src/qt
-    )
-    target_compile_definitions(original-assets-test PRIVATE
-        COMIC_CHAT_ORIGINAL_ROOT="${COMIC_CHAT_ORIGINAL_ROOT}"
-        COMIC_CHAT_ARTIFACTS_ROOT="${COMIC_CHAT_ARTIFACTS_ROOT}"
-    )
-    target_link_libraries(original-assets-test PRIVATE
-        Qt6::Core
-    )
-    add_test(NAME original-assets COMMAND original-assets-test)
-
-    add_executable(original-protocol-encoding-test
         tests/original_protocol_encoding_test.cpp
-    )
-    target_link_libraries(original-protocol-encoding-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-protocol-encoding COMMAND original-protocol-encoding-test)
-
-    add_executable(original-avb-test
-        tests/original_avb_test.cpp
-    )
-    target_link_libraries(original-avb-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-avb COMMAND original-avb-test)
-
-    add_executable(original-format-geometry-test
-        tests/original_format_geometry_test.cpp
-    )
-    target_link_libraries(original-format-geometry-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-format-geometry COMMAND original-format-geometry-test)
-
-    add_executable(original-url-test
-        tests/original_url_test.cpp
-    )
-    target_link_libraries(original-url-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-url COMMAND original-url-test)
-
-    add_executable(original-comic-core-test
-        tests/original_comic_core_test.cpp
-    )
-    target_link_libraries(original-comic-core-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-comic-core COMMAND original-comic-core-test)
-
-    add_executable(original-pageview-interaction-test
-        tests/original_pageview_interaction_test.cpp
-    )
-    target_link_libraries(original-pageview-interaction-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-pageview-interaction
-        COMMAND original-pageview-interaction-test)
-
-    add_executable(original-page-iteration-test
-        tests/original_page_iteration_test.cpp
-    )
-    target_link_libraries(original-page-iteration-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-page-iteration
-        COMMAND original-page-iteration-test)
-    set_tests_properties(original-page-iteration PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-    )
-
-    add_executable(original-irc-login-test
         tests/original_irc_login_test.cpp
-    )
-    target_link_libraries(original-irc-login-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-irc-login COMMAND original-irc-login-test)
-
-    add_executable(original-rule-daemon-test
-        tests/original_rule_daemon_test.cpp
-    )
-    target_link_libraries(original-rule-daemon-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-rule-daemon COMMAND original-rule-daemon-test)
-
-    add_executable(original-notification-test
-        tests/original_notification_test.cpp
-    )
-    target_link_libraries(original-notification-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-notification COMMAND original-notification-test)
-
-    add_executable(original-notipage-test
-        tests/original_notipage_test.cpp
-    )
-    target_link_libraries(original-notipage-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-notipage COMMAND original-notipage-test)
-    set_tests_properties(original-notipage PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-    )
-
-    add_executable(original-autopage-test
-        tests/original_autopage_test.cpp
-    )
-    target_link_libraries(original-autopage-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-autopage COMMAND original-autopage-test)
-    set_tests_properties(original-autopage PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-    )
-
-    add_executable(original-chatsrv-test
-        tests/original_chatsrv_test.cpp
-    )
-    target_link_libraries(original-chatsrv-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-chatsrv COMMAND original-chatsrv-test)
-    set_tests_properties(original-chatsrv PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-    )
-
-    add_executable(original-join-starring-test
         tests/original_join_starring_test.cpp
-    )
-    target_link_libraries(original-join-starring-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-join-starring COMMAND original-join-starring-test)
-
-    add_executable(original-comic-send-test
         tests/original_comic_send_test.cpp
-    )
-    target_link_libraries(original-comic-send-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-comic-send COMMAND original-comic-send-test)
-
-    add_executable(original-irc-state-test
         tests/original_irc_state_test.cpp
+        tests/original_presence_protocol_test.cpp
+        tests/original_irc_parser_test.cpp
+        tests/original_irc_dispatch_test.cpp
+        tests/original_slash_command_test.cpp
+        tests/original_multiroom_routing_test.cpp
+        tests/original_mdi_join_test.cpp
+        tests/original_member_commands_test.cpp
+        tests/original_channel_properties_test.cpp
+        tests/original_room_switch_test.cpp
+        tests/original_motd_away_test.cpp
+        tests/original_room_user_list_test.cpp
+        tests/original_admin_dialog_test.cpp
     )
-    target_link_libraries(original-irc-state-test PRIVATE
+    set_source_files_properties(tests/original_ccommon_test.cpp PROPERTIES
+        COMPILE_DEFINITIONS "main=run_original_ccommon_test")
+    set_source_files_properties(tests/original_jis_conversion_test.cpp PROPERTIES
+        COMPILE_DEFINITIONS "main=run_original_jis_conversion_test")
+    set_source_files_properties(tests/original_intl_test.cpp PROPERTIES
+        COMPILE_DEFINITIONS "main=run_original_intl_test")
+    set_source_files_properties(tests/original_protocol_encoding_test.cpp PROPERTIES
+        COMPILE_DEFINITIONS "main=run_original_protocol_encoding_test")
+    set_source_files_properties(tests/original_irc_login_test.cpp PROPERTIES
+        COMPILE_DEFINITIONS "main=run_original_irc_login_test")
+    set_source_files_properties(tests/original_join_starring_test.cpp PROPERTIES
+        COMPILE_DEFINITIONS "main=run_original_join_starring_test")
+    set_source_files_properties(tests/original_comic_send_test.cpp PROPERTIES
+        COMPILE_DEFINITIONS "main=run_original_comic_send_test")
+    set_source_files_properties(tests/original_irc_state_test.cpp PROPERTIES
+        COMPILE_DEFINITIONS "main=run_original_irc_state_test")
+    set_source_files_properties(tests/original_presence_protocol_test.cpp PROPERTIES
+        COMPILE_DEFINITIONS "main=run_original_presence_protocol_test")
+    set_source_files_properties(tests/original_irc_parser_test.cpp PROPERTIES
+        COMPILE_DEFINITIONS "main=run_original_irc_parser_test")
+    set_source_files_properties(tests/original_irc_dispatch_test.cpp PROPERTIES
+        COMPILE_DEFINITIONS "main=run_original_irc_dispatch_test")
+    set_source_files_properties(tests/original_slash_command_test.cpp PROPERTIES
+        COMPILE_DEFINITIONS "main=run_original_slash_command_test")
+    set_source_files_properties(tests/original_multiroom_routing_test.cpp PROPERTIES
+        COMPILE_DEFINITIONS "main=run_original_multiroom_routing_test")
+    set_source_files_properties(tests/original_mdi_join_test.cpp PROPERTIES
+        COMPILE_DEFINITIONS "main=run_original_mdi_join_test")
+    set_source_files_properties(tests/original_member_commands_test.cpp PROPERTIES
+        COMPILE_DEFINITIONS "main=run_original_member_commands_test")
+    set_source_files_properties(tests/original_channel_properties_test.cpp PROPERTIES
+        COMPILE_DEFINITIONS "main=run_original_channel_properties_test")
+    set_source_files_properties(tests/original_room_switch_test.cpp PROPERTIES
+        COMPILE_DEFINITIONS "main=run_original_room_switch_test")
+    set_source_files_properties(tests/original_motd_away_test.cpp PROPERTIES
+        COMPILE_DEFINITIONS "main=run_original_motd_away_test")
+    set_source_files_properties(tests/original_room_user_list_test.cpp PROPERTIES
+        COMPILE_DEFINITIONS "main=run_original_room_user_list_test")
+    set_source_files_properties(tests/original_admin_dialog_test.cpp PROPERTIES
+        COMPILE_DEFINITIONS "main=run_original_admin_dialog_test")
+
+    add_executable(original-irc-suite-test
+        tests/original_irc_suite.cpp
+        ${original_irc_suite_sources}
+    )
+    target_link_libraries(original-irc-suite-test PRIVATE
         comic-chat-core
     )
-    add_test(NAME original-irc-state COMMAND original-irc-state-test)
 
-    add_executable(original-ui-structure-test
-        tests/original_ui_structure_test.cpp
+    foreach(original_irc_case IN ITEMS
+        original-ccommon
+        original-jis-conversion
+        original-intl
+        original-protocol-encoding
+        original-irc-login
+        original-join-starring
+        original-comic-send
+        original-irc-state
+        original-presence-protocol
+        original-irc-parser
+        original-irc-dispatch
+        original-slash-command
+        original-multiroom-routing
+        original-mdi-join
+        original-member-commands
+        original-channel-properties
+        original-room-switch
+        original-motd-away
+        original-room-user-list
+        original-admin-dialog
     )
-    target_link_libraries(original-ui-structure-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-ui-structure COMMAND original-ui-structure-test)
-    set_tests_properties(original-ui-structure PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-    )
-
-    add_executable(original-coolbar-test
-        tests/original_coolbar_test.cpp
-    )
-    target_link_libraries(original-coolbar-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-coolbar COMMAND original-coolbar-test)
-    set_tests_properties(original-coolbar PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-    )
-
-    add_executable(original-persistence-test
-        tests/original_persistence_test.cpp
-    )
-    target_link_libraries(original-persistence-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-persistence COMMAND original-persistence-test)
-    set_tests_properties(original-persistence PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-    )
-
-    add_executable(original-registry-persistence-test
-        tests/original_registry_persistence_test.cpp
-    )
-    target_link_libraries(original-registry-persistence-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-registry-persistence
-        COMMAND original-registry-persistence-test)
-
-    add_executable(original-text-view-test
-        tests/original_text_view_test.cpp
-    )
-    target_link_libraries(original-text-view-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-text-view COMMAND original-text-view-test)
-    set_tests_properties(original-text-view PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        add_test(NAME ${original_irc_case}
+            COMMAND original-irc-suite-test ${original_irc_case})
+    endforeach()
+    set_tests_properties(
+        original-intl
+        original-presence-protocol
+        original-irc-dispatch
+        original-multiroom-routing
+        original-mdi-join
+        original-member-commands
+        original-channel-properties
+        original-room-switch
+        original-motd-away
+        original-room-user-list
+        original-admin-dialog
+        PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     )
 
-    add_executable(original-text-font-dialog-test
-        tests/original_text_font_dialog_test.cpp
-    )
-    target_link_libraries(original-text-font-dialog-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-text-font-dialog
-        COMMAND original-text-font-dialog-test)
-    set_tests_properties(original-text-font-dialog PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-    )
-
-    add_executable(original-textpose-test
+    set(original_core_suite_sources
+        tests/original_rules_test.cpp
+        tests/original_ccomp_test.cpp
+        tests/original_constants_test.cpp
+        tests/original_assets_test.cpp
+        tests/original_avb_test.cpp
+        tests/original_format_geometry_test.cpp
+        tests/original_url_test.cpp
+        tests/original_comic_core_test.cpp
+        tests/original_rule_daemon_test.cpp
+        tests/original_notification_test.cpp
         tests/original_textpose_test.cpp
     )
-    target_link_libraries(original-textpose-test PRIVATE
+    foreach(original_core_source IN LISTS original_core_suite_sources)
+        get_filename_component(original_core_stem
+            "${original_core_source}" NAME_WE)
+        set_source_files_properties("${original_core_source}" PROPERTIES
+            COMPILE_DEFINITIONS "main=run_${original_core_stem}")
+    endforeach()
+
+    add_executable(original-core-suite-test
+        tests/original_core_suite.cpp
+        ${original_core_suite_sources}
+    )
+    target_link_libraries(original-core-suite-test PRIVATE
         comic-chat-core
     )
-    add_test(NAME original-textpose COMMAND original-textpose-test)
+
+    foreach(original_core_case IN ITEMS
+        original-rules
+        original-ccomp
+        original-constants
+        original-assets
+        original-avb
+        original-format-geometry
+        original-url
+        original-comic-core
+        original-rule-daemon
+        original-notification
+        original-textpose
+    )
+        add_test(NAME ${original_core_case}
+            COMMAND original-core-suite-test ${original_core_case})
+    endforeach()
     set_tests_properties(original-textpose PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     )
 
-    add_executable(original-history-test
+    set(original_ui_suite_sources
+        tests/original_pageview_interaction_test.cpp
+        tests/original_page_iteration_test.cpp
+        tests/original_notipage_test.cpp
+        tests/original_autopage_test.cpp
+        tests/original_chatsrv_test.cpp
+        tests/original_ui_structure_test.cpp
+        tests/original_coolbar_test.cpp
+        tests/original_persistence_test.cpp
+        tests/original_registry_persistence_test.cpp
+        tests/original_text_view_test.cpp
+        tests/original_text_font_dialog_test.cpp
         tests/original_history_test.cpp
-    )
-    target_link_libraries(original-history-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-history COMMAND original-history-test)
-    set_tests_properties(original-history PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-    )
-
-    add_executable(original-presence-protocol-test
-        tests/original_presence_protocol_test.cpp
-    )
-    target_link_libraries(original-presence-protocol-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-presence-protocol COMMAND original-presence-protocol-test)
-    set_tests_properties(original-presence-protocol PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-    )
-
-    add_executable(original-irc-parser-test
-        tests/original_irc_parser_test.cpp
-    )
-    target_link_libraries(original-irc-parser-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-irc-parser COMMAND original-irc-parser-test)
-
-    add_executable(original-slash-command-test
-        tests/original_slash_command_test.cpp
-    )
-    target_link_libraries(original-slash-command-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-slash-command COMMAND original-slash-command-test)
-
-    add_executable(original-multiroom-routing-test
-        tests/original_multiroom_routing_test.cpp
-    )
-    target_link_libraries(original-multiroom-routing-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-multiroom-routing COMMAND original-multiroom-routing-test)
-    set_tests_properties(original-multiroom-routing PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-    )
-
-    add_executable(original-mdi-join-test
-        tests/original_mdi_join_test.cpp
-    )
-    target_link_libraries(original-mdi-join-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-mdi-join COMMAND original-mdi-join-test)
-    set_tests_properties(original-mdi-join PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-    )
-
-    add_executable(original-member-commands-test
-        tests/original_member_commands_test.cpp
-    )
-    target_link_libraries(original-member-commands-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-member-commands COMMAND original-member-commands-test)
-    set_tests_properties(original-member-commands PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-    )
-
-    add_executable(original-channel-properties-test
-        tests/original_channel_properties_test.cpp
-    )
-    target_link_libraries(original-channel-properties-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-channel-properties
-        COMMAND original-channel-properties-test)
-    set_tests_properties(original-channel-properties PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-    )
-
-    add_executable(original-room-switch-test
-        tests/original_room_switch_test.cpp
-    )
-    target_link_libraries(original-room-switch-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-room-switch COMMAND original-room-switch-test)
-    set_tests_properties(original-room-switch PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-    )
-
-    add_executable(original-motd-away-test
-        tests/original_motd_away_test.cpp
-    )
-    target_link_libraries(original-motd-away-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-motd-away COMMAND original-motd-away-test)
-    set_tests_properties(original-motd-away PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-    )
-
-    add_executable(original-room-user-list-test
-        tests/original_room_user_list_test.cpp
-    )
-    target_link_libraries(original-room-user-list-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-room-user-list COMMAND original-room-user-list-test)
-    set_tests_properties(original-room-user-list PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-    )
-
-    add_executable(original-admin-dialog-test
-        tests/original_admin_dialog_test.cpp
-    )
-    target_link_libraries(original-admin-dialog-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-admin-dialog COMMAND original-admin-dialog-test)
-    set_tests_properties(original-admin-dialog PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-    )
-
-    add_executable(original-whisper-box-test
         tests/original_whisper_box_test.cpp
-    )
-    target_link_libraries(original-whisper-box-test PRIVATE
-        comic-chat-core
-    )
-    add_test(NAME original-whisper-box COMMAND original-whisper-box-test)
-    set_tests_properties(original-whisper-box PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-    )
-
-    add_executable(original-printing-test
         tests/original_printing_test.cpp
     )
-    target_link_libraries(original-printing-test PRIVATE
+    foreach(original_ui_source IN LISTS original_ui_suite_sources)
+        get_filename_component(original_ui_stem
+            "${original_ui_source}" NAME_WE)
+        set_source_files_properties("${original_ui_source}" PROPERTIES
+            COMPILE_DEFINITIONS "main=run_${original_ui_stem}")
+    endforeach()
+
+    add_executable(original-ui-suite-test
+        tests/original_ui_suite.cpp
+        ${original_ui_suite_sources}
+    )
+    target_link_libraries(original-ui-suite-test PRIVATE
         comic-chat-core
     )
-    add_test(NAME original-printing COMMAND original-printing-test)
-    set_tests_properties(original-printing PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+
+    foreach(original_ui_case IN ITEMS
+        original-pageview-interaction
+        original-page-iteration
+        original-notipage
+        original-autopage
+        original-chatsrv
+        original-ui-structure
+        original-coolbar
+        original-persistence
+        original-registry-persistence
+        original-text-view
+        original-text-font-dialog
+        original-history
+        original-whisper-box
+        original-printing
+    )
+        add_test(NAME ${original_ui_case}
+            COMMAND original-ui-suite-test ${original_ui_case})
+    endforeach()
+    set_tests_properties(
+        original-page-iteration
+        original-notipage
+        original-autopage
+        original-chatsrv
+        original-ui-structure
+        original-coolbar
+        original-persistence
+        original-text-view
+        original-text-font-dialog
+        original-history
+        original-whisper-box
+        original-printing
+        PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     )
 endif()

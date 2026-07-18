@@ -89,6 +89,8 @@ BOOL bWideToCharacterSet(QStringView input, BYTE characterSet,
                          QByteArray* output);
 BOOL bCharacterSetToWide(const QByteArray& input, BYTE characterSet,
                          QString* output);
+BOOL bWideToCodePage(QStringView input, UINT codePage, QByteArray* output);
+BOOL bCodePageToWide(const QByteArray& input, UINT codePage, QString* output);
 
 BOOL bDataToString(const QByteArray& source, QByteArray* destination,
                    BOOL afterColon);

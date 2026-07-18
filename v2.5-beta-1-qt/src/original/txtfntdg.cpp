@@ -15,16 +15,19 @@
 #include <QCheckBox>
 #include <QColor>
 #include <QComboBox>
-#include <QFontComboBox>
 #include <QFontDatabase>
 #include <QFontMetrics>
+#include <QFrame>
 #include <QGuiApplication>
 #include <QGroupBox>
 #include <QIcon>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QPixmap>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QScreen>
 #include <QSet>
 #include <QShowEvent>
@@ -35,6 +38,193 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <functional>
+#include <utility>
+
+class CSourceSimpleCombo final : public QWidget
+{
+public:
+    explicit CSourceSimpleCombo(const QString& identifier,
+                                QWidget* parent = nullptr)
+        : QWidget(parent)
+        , m_editor(new QLineEdit(this))
+        , m_list(new QListWidget(this))
+    {
+        setObjectName(identifier);
+        m_editor->setObjectName(identifier + QStringLiteral(".Edit"));
+        m_list->setObjectName(identifier + QStringLiteral(".List"));
+        m_list->setSelectionMode(QAbstractItemView::SingleSelection);
+        m_list->setFocusPolicy(Qt::NoFocus);
+        m_list->setFrameShape(QFrame::StyledPanel);
+        setFocusPolicy(Qt::StrongFocus);
+        setFocusProxy(m_editor);
+        m_editor->installEventFilter(this);
+
+        connect(m_list, &QListWidget::currentRowChanged, this,
+                [this](int row) {
+                    if (m_setting) return;
+                    m_setting = true;
+                    m_editor->setText(row >= 0 && row < count()
+                        ? itemText(row) : QString());
+                    m_setting = false;
+                    if (m_selectionChanged) m_selectionChanged(row);
+                });
+        connect(m_editor, &QLineEdit::textEdited, this,
+                [this](const QString& text) {
+                    if (m_setting) return;
+                    m_setting = true;
+                    m_list->setCurrentRow(findText(text));
+                    m_setting = false;
+                });
+        connect(m_editor, &QLineEdit::editingFinished, this,
+                [this] {
+                    if (!m_setting && m_editingFinished)
+                        m_editingFinished();
+                });
+    }
+
+    void addItem(const QString& text, const QVariant& data = {})
+    {
+        auto* item = new QListWidgetItem(text, m_list);
+        item->setData(Qt::UserRole, data);
+        if (count() == 1) setCurrentIndex(0);
+    }
+
+    void addItems(const QStringList& items)
+    {
+        for (const QString& item : items) addItem(item);
+    }
+
+    void clear()
+    {
+        m_setting = true;
+        m_list->clear();
+        m_editor->clear();
+        m_setting = false;
+    }
+
+    int count() const { return m_list->count(); }
+
+    QString itemText(int index) const
+    {
+        QListWidgetItem* item = index >= 0 && index < count()
+            ? m_list->item(index) : nullptr;
+        return item ? item->text() : QString();
+    }
+
+    QVariant itemData(int index) const
+    {
+        QListWidgetItem* item = index >= 0 && index < count()
+            ? m_list->item(index) : nullptr;
+        return item ? item->data(Qt::UserRole) : QVariant();
+    }
+
+    int findText(const QString& text) const
+    {
+        for (int index = 0; index < count(); ++index) {
+            if (itemText(index).compare(text, Qt::CaseInsensitive) == 0)
+                return index;
+        }
+        return -1;
+    }
+
+    int findData(const QVariant& data) const
+    {
+        for (int index = 0; index < count(); ++index) {
+            if (itemData(index) == data) return index;
+        }
+        return -1;
+    }
+
+    int currentIndex() const
+    {
+        const int row = m_list->currentRow();
+        return row >= 0
+            && itemText(row).compare(m_editor->text(),
+                                    Qt::CaseInsensitive) == 0
+            ? row : -1;
+    }
+
+    QString currentText() const { return m_editor->text(); }
+    QVariant currentData() const { return itemData(currentIndex()); }
+
+    void setCurrentIndex(int index)
+    {
+        m_setting = true;
+        if (index >= 0 && index < count()) {
+            m_list->setCurrentRow(index);
+            m_editor->setText(itemText(index));
+        } else {
+            m_list->setCurrentRow(-1);
+            m_editor->clear();
+        }
+        m_setting = false;
+    }
+
+    void setSelectionChangedHandler(std::function<void(int)> handler)
+    {
+        m_selectionChanged = std::move(handler);
+    }
+
+    void setEditingFinishedHandler(std::function<void()> handler)
+    {
+        m_editingFinished = std::move(handler);
+    }
+
+    QLineEdit* editor() const { return m_editor; }
+
+protected:
+    void resizeEvent(QResizeEvent* event) override
+    {
+        QWidget::resizeEvent(event);
+        const int editorHeight = qMin(
+            height(), m_editor->fontMetrics().height() + 6);
+        m_editor->setGeometry(0, 0, width(), editorHeight);
+        m_list->setGeometry(0, editorHeight, width(),
+                            qMax(0, height() - editorHeight));
+    }
+
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if (watched == m_editor && event->type() == QEvent::KeyPress) {
+            auto* key = static_cast<QKeyEvent*>(event);
+            int row = currentIndex();
+            if (key->key() == Qt::Key_Down && row + 1 < count()) {
+                setCurrentIndex(row + 1);
+                if (m_selectionChanged) m_selectionChanged(row + 1);
+                return true;
+            }
+            if (key->key() == Qt::Key_Up && row > 0) {
+                setCurrentIndex(row - 1);
+                if (m_selectionChanged) m_selectionChanged(row - 1);
+                return true;
+            }
+        }
+        return QWidget::eventFilter(watched, event);
+    }
+
+private:
+    QLineEdit* m_editor = nullptr;
+    QListWidget* m_list = nullptr;
+    bool m_setting = false;
+    std::function<void(int)> m_selectionChanged;
+    std::function<void()> m_editingFinished;
+};
+
+namespace {
+class CSourceThreeStateCheckBox final : public QCheckBox
+{
+public:
+    using QCheckBox::QCheckBox;
+
+protected:
+    void nextCheckState() override
+    {
+        setCheckState(checkState() == Qt::Unchecked
+            ? Qt::Checked : Qt::Unchecked);
+    }
+};
+}
 
 BOOL bCHARFORMATToLOGFONT(CHARFORMAT* charFormat, DWORD mask, LOGFONT* font)
 {
@@ -302,6 +492,7 @@ void CMyFontDialog::buildResourceDialog()
     m_messageType = new QComboBox(this);
     placeControl(m_messageType, dialog, mapper,
                  QStringLiteral("IDC_MESSAGETYPE"));
+    messageLabel->setBuddy(m_messageType);
 
     const QString messageTypes = originalResourceString(
         QStringLiteral("IDS_MESSAGETYPES"))
@@ -315,32 +506,43 @@ void CMyFontDialog::buildResourceDialog()
     m_richPreview->setReadOnly(true);
     m_richPreview->setAcceptRichText(true);
     m_richPreview->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
+    m_richPreview->setFocusPolicy(Qt::ClickFocus);
     m_richPreview->setGeometry(mapper.x(5), mapper.y(20),
                                mapper.x(251), mapper.y(120));
     m_richPreview->viewport()->setCursor(Qt::PointingHandCursor);
 
     auto* faceLabel = new QLabel(controlText(dialog, QStringLiteral("1088")), this);
     placeControl(faceLabel, dialog, mapper, QStringLiteral("1088"));
-    m_face = new QFontComboBox(this);
+    m_face = new CSourceSimpleCombo(QStringLiteral("1136"), this);
+    QStringList families = QFontDatabase::families();
+    families.erase(std::remove_if(families.begin(), families.end(),
+        [](const QString& family) {
+            return family.startsWith(QLatin1Char('@'));
+        }), families.end());
+    m_face->addItems(families);
     placeControl(m_face, dialog, mapper, QStringLiteral("1136"));
+    faceLabel->setBuddy(m_face);
 
     auto* styleLabel = new QLabel(controlText(dialog, QStringLiteral("1089")), this);
     placeControl(styleLabel, dialog, mapper, QStringLiteral("1089"));
-    m_style = new QComboBox(this);
+    m_style = new CSourceSimpleCombo(QStringLiteral("1137"), this);
     placeControl(m_style, dialog, mapper, QStringLiteral("1137"));
+    styleLabel->setBuddy(m_style);
 
     auto* sizeLabel = new QLabel(controlText(dialog, QStringLiteral("1090")), this);
     placeControl(sizeLabel, dialog, mapper, QStringLiteral("1090"));
-    m_pointSize = new QComboBox(this);
-    m_pointSize->setEditable(true);
+    m_pointSize = new CSourceSimpleCombo(QStringLiteral("1138"), this);
     placeControl(m_pointSize, dialog, mapper, QStringLiteral("1138"));
+    sizeLabel->setBuddy(m_pointSize);
 
     auto* effects = new QGroupBox(controlText(dialog, QStringLiteral("1072")), this);
     placeControl(effects, dialog, mapper, QStringLiteral("1072"));
-    m_strikeout = new QCheckBox(controlText(dialog, QStringLiteral("1040")), this);
+    m_strikeout = new CSourceThreeStateCheckBox(controlText(
+        dialog, QStringLiteral("1040")), this);
     m_strikeout->setTristate(true);
     placeControl(m_strikeout, dialog, mapper, QStringLiteral("1040"));
-    m_underline = new QCheckBox(controlText(dialog, QStringLiteral("1041")), this);
+    m_underline = new CSourceThreeStateCheckBox(controlText(
+        dialog, QStringLiteral("1041")), this);
     m_underline->setTristate(true);
     placeControl(m_underline, dialog, mapper, QStringLiteral("1041"));
 
@@ -354,11 +556,13 @@ void CMyFontDialog::buildResourceDialog()
                          QVariant::fromValue<quint32>(color));
     }
     placeControl(m_color, dialog, mapper, QStringLiteral("1139"));
+    colorLabel->setBuddy(m_color);
 
     auto* scriptLabel = new QLabel(controlText(dialog, QStringLiteral("1094")), this);
     placeControl(scriptLabel, dialog, mapper, QStringLiteral("1094"));
     m_script = new QComboBox(this);
     placeControl(m_script, dialog, mapper, QStringLiteral("1140"));
+    scriptLabel->setBuddy(m_script);
 
     auto* hiddenSample = new QGroupBox(controlText(
         dialog, QStringLiteral("1073")), this);
@@ -388,25 +592,29 @@ void CMyFontDialog::buildResourceDialog()
             this, [this](int) { OnChangeMessageType(); });
     connect(m_richPreview, &QTextEdit::selectionChanged,
             this, &CMyFontDialog::HandleSelection);
-    connect(m_face, &QFontComboBox::currentFontChanged, this,
-            [this](const QFont& selected) {
+    const auto faceChanged = [this] {
         if (m_bSettingUI) return;
-        populateStyles(selected.family());
-        populateScripts(selected.family());
+        populateStyles(m_face->currentText());
+        populateSizes(m_face->currentText(), m_style->currentText());
+        populateScripts(m_face->currentText());
         OnFontChange();
-    });
-    connect(m_style, qOverload<int>(&QComboBox::activated),
-            this, [this](int) {
-        populateSizes(m_face->currentFont().family(),
+    };
+    m_face->setSelectionChangedHandler(
+        [faceChanged](int) { faceChanged(); });
+    m_face->setEditingFinishedHandler(faceChanged);
+    const auto styleChanged = [this] {
+        if (m_bSettingUI) return;
+        populateSizes(m_face->currentText(),
                       m_style->currentText());
         OnFontChange();
-    });
-    connect(m_pointSize, qOverload<int>(&QComboBox::activated),
-            this, [this](int) { OnFontChange(); });
-    if (m_pointSize->lineEdit()) {
-        connect(m_pointSize->lineEdit(), &QLineEdit::editingFinished,
-                this, &CMyFontDialog::OnFontChange);
-    }
+    };
+    m_style->setSelectionChangedHandler(
+        [styleChanged](int) { styleChanged(); });
+    m_style->setEditingFinishedHandler(styleChanged);
+    m_pointSize->setSelectionChangedHandler(
+        [this](int) { OnFontChange(); });
+    m_pointSize->setEditingFinishedHandler(
+        [this] { OnFontChange(); });
     connect(m_color, qOverload<int>(&QComboBox::activated),
             this, [this](int) { OnFontChange(); });
     connect(m_script, qOverload<int>(&QComboBox::activated),
@@ -415,6 +623,16 @@ void CMyFontDialog::buildResourceDialog()
             this, [this](Qt::CheckState) { OnStrikeoutChange(); });
     connect(m_underline, &QCheckBox::checkStateChanged,
             this, [this](Qt::CheckState) { OnUnderlineChange(); });
+
+    QWidget::setTabOrder(m_messageType, m_face->editor());
+    QWidget::setTabOrder(m_face->editor(), m_style->editor());
+    QWidget::setTabOrder(m_style->editor(), m_pointSize->editor());
+    QWidget::setTabOrder(m_pointSize->editor(), m_strikeout);
+    QWidget::setTabOrder(m_strikeout, m_underline);
+    QWidget::setTabOrder(m_underline, m_color);
+    QWidget::setTabOrder(m_color, m_script);
+    QWidget::setTabOrder(m_script, ok);
+    QWidget::setTabOrder(ok, cancel);
 }
 
 BOOL CMyFontDialog::SetupRichPreview()
@@ -550,6 +768,13 @@ BOOL CMyFontDialog::SetupRichPreview()
 void CMyFontDialog::capturePreviewFormats()
 {
     for (int line = 0; line < m_nLines; ++line) {
+        const int type = m_mesgTypes[line];
+        const BOOL initialized = type < NREGULARFONTS
+            ? theApp.m_bCfInitialized : theApp.m_bCfHLInitialized;
+        if (initialized) {
+            m_cfArray[type] = theApp.m_cfArray[type];
+            continue;
+        }
         const int start = qBound(0, m_mesgStarts[line],
                                  previewTextLength(m_richPreview));
         QTextCursor cursor(m_richPreview->document());
@@ -569,7 +794,7 @@ void CMyFontDialog::capturePreviewFormats()
                 static_cast<BYTE>(color.blue())), 0, &captured);
         if (font.pointSizeF() > 0) captured.yHeight = qRound(
             font.pointSizeF() * 20.0);
-        m_cfArray[m_mesgTypes[line]] = captured;
+        m_cfArray[type] = captured;
     }
 }
 
@@ -902,7 +1127,7 @@ void CMyFontDialog::OnFontChange()
 
     QString family;
     if (m_face->currentIndex() >= 0)
-        family = m_face->currentFont().family();
+        family = m_face->currentText();
     QFont font = family.isEmpty() ? QFont() : QFont(family);
     int pointSize = 0;
     if (m_pointSize->currentIndex() >= 0)

@@ -17,6 +17,7 @@
 #include "originalassets.h"
 #include "pageview.h"
 #include "panel.h"
+#include "proppage.h"
 #include "roomlist.h"
 #include "resource.h"
 #include "setupdlg.h"
@@ -177,6 +178,36 @@ BOOL ReplaceToken(QString& value, const QString& token,
     value = value.left(index) + replacement
         + value.mid(index + token.size());
     return TRUE;
+}
+
+void CIrcProto::TryNewNick(int messageId, const QString& showNick,
+                           BOOL registerNick, QString* newNick)
+{
+    CNicknameDlg dialog(theApp.m_pMainWnd.data());
+    dialog.m_label = originalResourceString(messageId);
+    dialog.m_strNickname = showNick.isNull()
+        ? QString::fromUtf8(GetMyName()) : showNick;
+    dialog.m_bSpacesAllowed = IsIRCX();
+    if (dialog.exec() == QDialog::Rejected) {
+        if (GetConnectionStatus() == CX_CONNECTING)
+            Disconnect();
+        return;
+    }
+
+    if (dialog.m_strNickname.isEmpty()) {
+        dialog.m_strNickname = originalResourceString(
+            QStringLiteral("IDS_DEFAULT_NICK"));
+    }
+    if (CPersonalPage* page = GetPersonalPage())
+        page->SetNickname(dialog.m_strNickname);
+    if (newNick) *newNick = dialog.m_strNickname;
+
+    if (registerNick) {
+        if (GetConnectionStatus() != CX_DISCONNECTED)
+            ChatSetNick(dialog.m_strNickname);
+        else
+            SetMyName(dialog.m_strNickname);
+    }
 }
 
 BOOL bReplaceMacroTokens(QString& message, BOOL in)
@@ -2443,6 +2474,30 @@ void ChatSwitchChannel(const QString& channelName)
     g_bEnterOnCreate = FALSE;
     bSwitchToRoom(dialog.m_strChannel, dialog.m_strPassword,
                   QString(), 0L, TRUE);
+}
+
+void OnBadChannelPassword(CRoomInfo& enterInfo)
+{
+    constexpr int maximumDisplayedChannelLength = 20;
+    QString channelName = DecodeChan(enterInfo.m_strChannel);
+    if (channelName.size() > maximumDisplayedChannelLength) {
+        channelName = channelName.left(maximumDisplayedChannelLength)
+            + QStringLiteral("...");
+    }
+
+    if (!enterInfo.m_strPassword.isEmpty())
+        showOriginalMessage(IDS_BAD_PASSWORD);
+
+    CPasswordDlg dialog(theApp.m_pMainWnd.data());
+    dialog.m_strMessage = originalResourceString(ID_PASSWORD_PROMPT);
+    ReplaceToken(dialog.m_strMessage, QStringLiteral("%1"), channelName);
+    dialog.m_strPassword = enterInfo.m_strPassword;
+    enterInfo.m_strPassword.clear();
+    if (dialog.exec() == QDialog::Accepted) {
+        g_bEnterOnCreate = FALSE;
+        bSwitchToRoom(enterInfo.m_strChannel, dialog.m_strPassword,
+                      QString(), 0L, FALSE, TRUE);
+    }
 }
 
 void ShowBadChannelName(const QString& channelName)

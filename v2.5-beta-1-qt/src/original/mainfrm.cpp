@@ -754,7 +754,7 @@ void CMainFrame::updateCommandUi()
     setActionsEnabled(m_commandActions, QStringLiteral("ID_DEFINE_MACRO"),
                       automationEnabled);
     setActionsEnabled(m_commandActions, QStringLiteral("ID_SETFONT"),
-                      m_doc && !statusView && !comicView);
+                      m_doc && !statusView);
     for (INT macro = 0; macro < NMACROS; ++macro) {
         const QString command = QStringLiteral("ID_MACRO_A%1").arg(macro);
         setActionsEnabled(m_commandActions, command,
@@ -873,7 +873,7 @@ void CMainFrame::executeCommand(const QString& commandIdentifier)
     } else if (commandIdentifier == QLatin1String("ID_SEND_ACTION")) {
         if (GetSay()) GetSay()->OnSendAction();
     } else if (commandIdentifier == QLatin1String("ID_SETFONT")) {
-        if (m_doc && !m_doc->m_bComicView) m_doc->OnSetfont();
+        if (m_doc) m_doc->OnSetfont();
     } else if (commandIdentifier == QLatin1String("ID_MEMBER_GETINFO")) {
         if (m_doc && hasComicSelection(m_doc)) m_doc->OnMemberGetinfo();
     } else if (commandIdentifier == QLatin1String("ID_MEMBER_IGNORE")) {

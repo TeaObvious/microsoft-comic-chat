@@ -4,6 +4,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QFontDatabase>
 #include <QHash>
 #include <QRegularExpression>
 #include <QStringList>
@@ -13,6 +14,9 @@
 #endif
 #ifndef COMIC_CHAT_ARTIFACTS_ROOT
 #error COMIC_CHAT_ARTIFACTS_ROOT must be supplied by CMake
+#endif
+#ifndef COMIC_CHAT_V1_SHARED_ROOT
+#error COMIC_CHAT_V1_SHARED_ROOT must be supplied by CMake
 #endif
 
 QString originalAssetRoot()
@@ -25,6 +29,13 @@ QString originalArtifactsRoot()
 {
     static const QString root = QFileInfo(
         QString::fromUtf8(COMIC_CHAT_ARTIFACTS_ROOT)).canonicalFilePath();
+    return root;
+}
+
+QString originalV1SharedRoot()
+{
+    static const QString root = QFileInfo(
+        QString::fromUtf8(COMIC_CHAT_V1_SHARED_ROOT)).canonicalFilePath();
     return root;
 }
 
@@ -64,6 +75,20 @@ QString originalArtifactPath(const QString& relativePath)
     return canonical.startsWith(root + QDir::separator()) ? canonical : QString();
 }
 
+QString originalV1SharedPath(const QString& fileName)
+{
+    const QString root = originalV1SharedRoot();
+    if (root.isEmpty() || fileName.isEmpty() || QDir::isAbsolutePath(fileName))
+        return {};
+    const QString clean = QDir::cleanPath(fileName);
+    if (clean == QLatin1String("..") || clean.startsWith(QLatin1String("../"))
+        || clean == QLatin1String(".")) return {};
+    const QFileInfo info(QDir(root).filePath(clean));
+    if (!info.exists() || !info.isFile()) return {};
+    const QString canonical = info.canonicalFilePath();
+    return canonical.startsWith(root + QDir::separator()) ? canonical : QString();
+}
+
 QString originalResourcePath(const QString& fileName)
 {
     return originalAssetPath(QStringLiteral("res/%1").arg(fileName));
@@ -82,6 +107,13 @@ QString originalArtPackPath(const QString& fileName)
 QString originalArtPackArchivePath(const QString& fileName)
 {
     return originalAssetPath(QStringLiteral("artpack1/archive/%1").arg(fileName));
+}
+
+int registerOriginalComicFont()
+{
+    static const int fontId = QFontDatabase::addApplicationFont(
+        originalV1SharedPath(QStringLiteral("comic.ttf")));
+    return fontId;
 }
 
 namespace {

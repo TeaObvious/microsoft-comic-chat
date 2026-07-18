@@ -108,6 +108,27 @@ QByteArray toUtf16Le(QStringView string)
     return result;
 }
 
+const char* codePageName(UINT codePage)
+{
+    switch (codePage) {
+    case 874: return "WINDOWS-874";
+    case 932: return "SHIFT-JIS";
+    case 936: return "CP936";
+    case 949: return "CP949";
+    case 950: return "CP950";
+    case 1250: return "WINDOWS-1250";
+    case 1251: return "WINDOWS-1251";
+    case 1252: return "WINDOWS-1252";
+    case 1253: return "WINDOWS-1253";
+    case 1254: return "WINDOWS-1254";
+    case 1255: return "WINDOWS-1255";
+    case 1256: return "WINDOWS-1256";
+    case 1257: return "WINDOWS-1257";
+    case 1258: return "WINDOWS-1258";
+    default: return nullptr;
+    }
+}
+
 const char* codePageForCharacterSet(BYTE characterSet)
 {
     switch (characterSet) {
@@ -123,7 +144,9 @@ const char* codePageForCharacterSet(BYTE characterSet)
     case BALTIC_CHARSET: return "WINDOWS-1257";
     case RUSSIAN_CHARSET: return "WINDOWS-1251";
     case THAI_CHARSET: return "WINDOWS-874";
-    default: return nullptr;
+    case ANSI_CHARSET:
+    case DEFAULT_CHARSET:
+    default: return codePageName(GetACP());
     }
 }
 }
@@ -507,6 +530,26 @@ BOOL bCharacterSetToWide(const QByteArray& input, BYTE characterSet,
         return TRUE;
     }
     *output = QString::fromLocal8Bit(input);
+    return TRUE;
+}
+
+BOOL bWideToCodePage(QStringView input, UINT codePage, QByteArray* output)
+{
+    if (!output) return FALSE;
+    const char* name = codePageName(codePage);
+    return name && convertCodePage(toUtf16Le(input), "UTF-16LE", name,
+                                   output) ? TRUE : FALSE;
+}
+
+BOOL bCodePageToWide(const QByteArray& input, UINT codePage, QString* output)
+{
+    if (!output) return FALSE;
+    const char* name = codePageName(codePage);
+    QByteArray utf16;
+    if (!name || !convertCodePage(input, name, "UTF-16LE", &utf16)) {
+        return FALSE;
+    }
+    *output = fromUtf16Le(utf16);
     return TRUE;
 }
 

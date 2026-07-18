@@ -4,10 +4,12 @@
 #include "pageview.h"
 #include "paintdc.h"
 #include "panel.h"
+#include "originalassets.h"
 #include "protsupp.h"
 #include "userinfo.h"
 
 #include <QApplication>
+#include <QFontDatabase>
 #include <QImage>
 #include <QPainter>
 
@@ -43,7 +45,13 @@ int main(int argc, char** argv)
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
 
+    const int comicFontId = registerOriginalComicFont();
+    require(comicFontId >= 0);
+    require(QFontDatabase::applicationFontFamilies(comicFontId).contains(
+        originalResourceString(QStringLiteral("ID_COMIC_FONT_NAME"))));
     theApp.InitializeComicsFonts();
+    require(theApp.m_comicsFont.family()
+            == originalResourceString(QStringLiteral("ID_COMIC_FONT_NAME")));
     CUnitPanelPage::SetUnitPanelWidth(3000); // COMFORTABLEPANELWIDTH in pageview.cpp
     CUnitPanelPage::SetUnitPanelHeight(3000);
     CUnitPanelPage::SetUnitPanelsPerRow(2);

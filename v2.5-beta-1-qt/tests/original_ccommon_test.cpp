@@ -2,6 +2,8 @@
 #include "chat.h"
 #include "ircproto.h"
 
+#include <QLocale>
+
 #include <iostream>
 
 namespace {
@@ -10,11 +12,24 @@ bool expect(bool condition, const char* message)
     if (!condition) std::cerr << message << '\n';
     return condition;
 }
+
+class CaptureProtocol final : public CIrcProto {
+public:
+    void SendMessageText(const QString& raw) override
+    {
+        sent = raw.toLatin1();
+    }
+
+    QByteArray sent;
+};
 }
 
 int main()
 {
     bool okay = true;
+    const QLocale savedLocale;
+    QLocale::setDefault(QLocale(QLocale::English,
+                                QLocale::UnitedStates));
 
     okay &= expect(g_nMaxLengthSmall == 31, "small length");
     okay &= expect(g_nMaxLength == 255, "large length");
@@ -249,7 +264,7 @@ int main()
                    "Shift-JIS to wide platform boundary");
 
     const QString encodedNick = EncodeNick(QStringLiteral("A B,*?\\\n"), true);
-    okay &= expect(encodedNick.toUtf8()
+    okay &= expect(encodedNick.toLatin1()
                        == QByteArrayLiteral("'A\\bB\\c\\*\\?\\\\\\n"),
                    "ircproto nickname delegates to ccommon");
     okay &= expect(DecodeNick(QStringLiteral("'A\\bB\\c\\\\\\n"))
@@ -264,15 +279,63 @@ int main()
 
     CIrcProto protocol;
     const QString utfParameter = QStringLiteral("A\u00a2\u20ac");
-    okay &= expect(protocol.EncodeString(utfParameter, ENC_UTF8).toUtf8()
+    okay &= expect(protocol.EncodeString(utfParameter, ENC_UTF8).toLatin1()
                        == expectedUtf,
                    "ircproto UTF-8 parameter delegates to ccommon");
     int parameterEncoding = ENC_UTF8;
     okay &= expect(protocol.StrEncodeCommandParam(
-                       AT_MESSAGE, &parameterEncoding, utfParameter).toUtf8()
+                       AT_MESSAGE, &parameterEncoding, utfParameter).toLatin1()
                        == expectedUtf,
                    "command parameter delegates to EncodeString");
 
+    QByteArray acpBytes;
+    QString acpText;
+    const QString euro = QStringLiteral("\u20ac");
+    okay &= expect(bWideToCodePage(QStringView(euro), GetACP(), &acpBytes)
+                       && acpBytes == QByteArray::fromHex("80")
+                       && bCodePageToWide(acpBytes, GetACP(), &acpText)
+                       && acpText == euro,
+                   "Windows-1252 ACP adapter boundary");
+    const QString acpChannel = QLatin1Char('#') + euro;
+    const QString encodedAcpChannel = EncodeChan(acpChannel);
+    okay &= expect(encodedAcpChannel.toLatin1()
+                       == QByteArrayLiteral("#") + QByteArray::fromHex("80")
+                       && DecodeChan(encodedAcpChannel) == acpChannel,
+                   "Windows-1252 channel byte-carrier boundary");
+    const QString encodedUtfChannel = EncodeChan(euro);
+    okay &= expect(encodedUtfChannel.toLatin1()
+                       == QByteArrayLiteral("%#")
+                           + QByteArray::fromHex("e282ac")
+                       && DecodeChan(encodedUtfChannel) == euro,
+                   "extended channel UTF-8 byte-carrier boundary");
+
+    CaptureProtocol propertyProtocol;
+    propertyProtocol.m_pSock->m_queries.FreeRemoveAll();
+    propertyProtocol.m_pSock->m_bIrcXServer = true;
+    propertyProtocol.SetConnectionStatus(CX_INCHANNEL);
+    propertyProtocol.m_strChannel = encodedUtfChannel;
+    okay &= expect(propertyProtocol.ChatSetClientData(euro)
+                       && propertyProtocol.sent
+                           == QByteArrayLiteral("PROP ")
+                               + encodedUtfChannel.toLatin1()
+                               + QByteArrayLiteral(" CLIENT :")
+                               + QByteArray::fromHex("e282ac")
+                               + QByteArrayLiteral("\r\n"),
+                   "CLIENT property follows channel UTF-8 encoding");
+    propertyProtocol.m_pSock->m_queries.FreeRemoveAll();
+    propertyProtocol.m_pSock->m_bIrcXServer = false;
+    propertyProtocol.SetConnectionStatus(CX_DISCONNECTED);
+
+    CCQuery acpQuery(qpOnConnectEvent, ctWho, dtMax, nullptr,
+                     QString(), euro, TRUE);
+    const PPRUSERMATCH acpMatch = acpQuery.GetPrUserMatch();
+    okay &= expect(acpMatch
+                       && acpMatch->m_maskStorage
+                           == QByteArray::fromHex("80")
+                       && acpMatch->cbNickname == 1,
+                   "WHO query mask retains the source ACP bytes");
+
+    QLocale::setDefault(QLocale(QLocale::Japanese, QLocale::Japan));
     theApp.m_charSet = SHIFTJIS_CHARSET;
     okay &= expect(protocol.EncodeStringBytes(wideShiftJis, ENC_DBCS)
                        == QByteArray::fromHex("1b244224221b2842"),
@@ -297,17 +360,19 @@ int main()
     okay &= expect(DecodeChan(encodedDbcsChannel) == wideDbcsChannel,
                    "DBCS channel incoming JIS conversion");
 
+    QLocale::setDefault(QLocale(QLocale::English,
+                                QLocale::UnitedStates));
+    theApp.m_charSet = ANSI_CHARSET;
     QString incomingUtf = QString::fromLatin1(expectedUtf);
     CSInString(&incomingUtf, QStringLiteral("%"));
     okay &= expect(incomingUtf == utfSource,
                    "CSInString percent-channel UTF-8 selection");
-    theApp.m_charSet = ANSI_CHARSET;
 
-    QString ansiDbcs = QString::fromLatin1(expectedUtf);
-    const QString unchangedAnsiDbcs = ansiDbcs;
+    QString ansiDbcs = QString::fromLatin1(QByteArray::fromHex("80"));
     CSInString(&ansiDbcs);
-    okay &= expect(ansiDbcs == unchangedAnsiDbcs,
-                   "CSInString ANSI DBCS fast path");
+    okay &= expect(ansiDbcs == euro,
+                   "CSInString ANSI DBCS ACP display boundary");
 
+    QLocale::setDefault(savedLocale);
     return okay ? 0 : 1;
 }

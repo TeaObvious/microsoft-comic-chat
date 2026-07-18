@@ -514,13 +514,9 @@ extern "C" void* GetMime() { return g_pMime; }
 
 extern "C" void SetMime(DWORD characterSet)
 {
-    int codePage = 0;
-    switch (static_cast<BYTE>(characterSet)) {
-    case SHIFTJIS_CHARSET: codePage = 932; break;
-    case HANGEUL_CHARSET: codePage = 949; break;
-    case CHINESEBIG5_CHARSET: codePage = 950; break;
-    case GB2312_CHARSET: codePage = 936; break;
-    default:
+    Q_UNUSED(characterSet);
+    const int codePage = static_cast<int>(GetACP());
+    if (!farEastCodePage(codePage)) {
         g_pMime = nullptr;
         return;
     }
@@ -568,7 +564,11 @@ QString IntlTextToQString(const char* bytes, int length)
     if (!bytes) return QString();
     if (length < 0) length = static_cast<int>(std::strlen(bytes));
     const QByteArray input(bytes, length);
-    if (!g_pMime) return QString::fromUtf8(input);
+    if (!g_pMime) {
+        QString output;
+        return bCodePageToWide(input, GetACP(), &output)
+            ? output : QString::fromLatin1(input);
+    }
     QString output;
     if (!bCharacterSetToWide(input, characterSetForCodePage(g_pMime->iCp),
                              &output)) {
@@ -579,7 +579,11 @@ QString IntlTextToQString(const char* bytes, int length)
 
 QByteArray IntlTextFromQString(QStringView text)
 {
-    if (!g_pMime) return text.toString().toUtf8();
+    if (!g_pMime) {
+        QByteArray output;
+        return bWideToCodePage(text, GetACP(), &output)
+            ? output : text.toString().toLatin1();
+    }
     QByteArray output;
     if (!bWideToCharacterSet(text, characterSetForCodePage(g_pMime->iCp),
                              &output)) {
@@ -599,7 +603,7 @@ CDWordArray* IntlFormattingFromUtf8(const char* utf8,
                                     const CDWordArray* formatting)
 {
     if (!formatting) return nullptr;
-    if (!g_pMime || !utf8) {
+    if (!utf8) {
         return CopyFormatting(const_cast<CDWordArray*>(formatting));
     }
     const QByteArray source(utf8);

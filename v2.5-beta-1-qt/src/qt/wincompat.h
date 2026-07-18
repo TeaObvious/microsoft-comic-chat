@@ -25,6 +25,9 @@ using COLORREF = std::uint32_t;
 constexpr BOOL FALSE = 0;
 constexpr BOOL TRUE = 1;
 
+// Qt replacement for the Win32 process ANSI-code-page query.
+UINT GetACP();
+
 // ANSI LOGFONT/CHARFORMAT records used by the original font code. LOGFONT is
 // kept as a compatibility value type so format.cpp and txtfntdg.cpp can retain
 // their original conversion functions; Qt fonts are only the drawing/UI

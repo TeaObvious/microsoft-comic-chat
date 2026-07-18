@@ -126,6 +126,7 @@ bool bInitEnterInfo(CRoomInfo& enterInfo, const QString& channelName,
 void ChatSwitchChannel(const QString& channelName = QString());
 void ChatCreateRoom(CRoomInfo& enterInfo);
 void ShowBadChannelName(const QString& channelName);
+void OnBadChannelPassword(CRoomInfo& enterInfo);
 bool bSwitchToRoom(const QString& newRoom = QString(),
                    const QString& password = QString(),
                    const QString& creationModes = QString(),

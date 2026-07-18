@@ -14,6 +14,7 @@
 
 #include <QApplication>
 #include <QListWidget>
+#include <QLocale>
 #include <QMessageBox>
 #include <QTimer>
 
@@ -233,6 +234,37 @@ int main(int argc, char** argv)
     quotedBytes += QByteArrayLiteral("\020r\020n");
     REQUIRE(protocol.sent.size() == 1);
     REQUIRE(protocol.sent[0] == wirePrefix + quotedBytes + QByteArrayLiteral("\r\n"));
+
+    const QLocale savedLocale;
+    QLocale::setDefault(QLocale(QLocale::English,
+                                QLocale::UnitedStates));
+    const QString savedChannel = protocol.m_strChannel;
+    protocol.m_strChannel = EncodeChan(
+        QLatin1Char('#') + QStringLiteral("\u20ac"));
+    protocol.sent.clear();
+    protocol.m_pSock->m_nMaxMsgLength = g_nDefaultIOBuff;
+    REQUIRE(protocol.bChatSendToTarget(QString(), QString(), sourceText,
+                                       BM_SAY, false));
+    REQUIRE(protocol.sent.size() == 1);
+    REQUIRE(protocol.sent[0]
+            == QByteArrayLiteral("PRIVMSG #") + QByteArray::fromHex("80")
+                + QByteArrayLiteral(" :...\r\n"));
+    protocol.m_strChannel = savedChannel;
+
+    QLocale::setDefault(QLocale(QLocale::Japanese, QLocale::Japan));
+    theApp.m_charSet = SHIFTJIS_CHARSET;
+    protocol.sent.clear();
+    protocol.m_pSock->m_nMaxMsgLength = 96;
+    REQUIRE(protocol.bChatSendToTarget(QString(), QString(), longSourceText,
+                                       BM_SAY, false));
+    REQUIRE(protocol.sent.size() == 1);
+    const QByteArray cp932FirstChunk = sourceText.repeated(5).toLatin1();
+    REQUIRE(protocol.sent[0]
+            == wirePrefix + cp932FirstChunk + QByteArrayLiteral("\r\n"));
+    REQUIRE(cp932FirstChunk.size()
+            < protocol.EncodeStringBytes(longSourceText, ENC_DBCS).size());
+    theApp.m_charSet = ANSI_CHARSET;
+    QLocale::setDefault(savedLocale);
 
     g_rgpuiWhisperees.clear();
     document.m_memberList = nullptr;

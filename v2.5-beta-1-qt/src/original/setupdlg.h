@@ -11,6 +11,7 @@ class CCharacterPage;
 class CPersonalPage;
 class CSetupPage;
 class CChatService;
+class QLabel;
 class QLineEdit;
 class QPushButton;
 class QShowEvent;
@@ -55,6 +56,39 @@ private:
     QLineEdit* m_password = nullptr;
     QPushButton* m_ok = nullptr;
     BOOL m_bInitialized = FALSE;
+};
+
+class CNicknameDlg : public QDialog {
+public:
+    explicit CNicknameDlg(QWidget* parent = nullptr);
+    void accept() override;
+
+    QString m_label;
+    QString m_strNickname;
+    BOOL m_bSpacesAllowed = TRUE;
+
+protected:
+    void showEvent(QShowEvent* event) override;
+
+private:
+    QLabel* m_staticNick = nullptr;
+    QLineEdit* m_editNick = nullptr;
+};
+
+class CPasswordDlg : public QDialog {
+public:
+    explicit CPasswordDlg(QWidget* parent = nullptr);
+    void accept() override;
+
+    QString m_strPassword;
+    QString m_strMessage;
+
+protected:
+    void showEvent(QShowEvent* event) override;
+
+private:
+    QLabel* m_message = nullptr;
+    QLineEdit* m_password = nullptr;
 };
 
 const char* GetMyCharacter();

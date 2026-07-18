@@ -24,6 +24,7 @@
 #include <QGridLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QRegularExpression>
@@ -760,6 +761,127 @@ void CChannelDlg::accept()
 
 QString CChannelDlg::channel() const { return m_channel->text(); }
 QString CChannelDlg::password() const { return m_password->text(); }
+
+CNicknameDlg::CNicknameDlg(QWidget* parent)
+    : QDialog(parent)
+    , m_staticNick(new QLabel(this))
+    , m_editNick(new QLineEdit(this))
+{
+    const QString resourceIdentifier = QStringLiteral("IDD_NICKNAME");
+    const OriginalDialogResource dialog = originalDialogResource(
+        resourceIdentifier);
+    QFont dialogFont(dialog.fontFamily);
+    if (dialog.fontPointSize > 0) dialogFont.setPointSize(dialog.fontPointSize);
+    setFont(dialogFont);
+    const DialogUnitMapper mapper(dialogFont);
+    setWindowTitle(dialog.caption);
+    setFixedSize(mapper.x(dialog.width), mapper.y(dialog.height));
+
+    m_staticNick->setWordWrap(true);
+    placeDialogControl(m_staticNick, dialog, mapper,
+                       QStringLiteral("IDC_STATICNICKNAME"));
+    auto* nicknameLabel = new QLabel(originalDialogControlText(
+        resourceIdentifier, QStringLiteral("IDC_STATIC")), this);
+    nicknameLabel->setBuddy(m_editNick);
+    placeDialogControl(nicknameLabel, dialog, mapper,
+                       QStringLiteral("IDC_STATIC"));
+    placeDialogControl(m_editNick, dialog, mapper,
+                       QStringLiteral("IDC_NEWNICK"));
+    m_editNick->setMaxLength(MAX_NICKINPUT);
+
+    auto* ok = new QPushButton(originalDialogControlText(
+        resourceIdentifier, QStringLiteral("IDOK")), this);
+    ok->setDefault(true);
+    placeDialogControl(ok, dialog, mapper, QStringLiteral("IDOK"));
+    auto* cancel = new QPushButton(originalDialogControlText(
+        resourceIdentifier, QStringLiteral("IDCANCEL")), this);
+    placeDialogControl(cancel, dialog, mapper, QStringLiteral("IDCANCEL"));
+    setTabOrder(m_editNick, ok);
+    setTabOrder(ok, cancel);
+    connect(ok, &QPushButton::clicked, this, &CNicknameDlg::accept);
+    connect(cancel, &QPushButton::clicked, this, &QDialog::reject);
+}
+
+void CNicknameDlg::showEvent(QShowEvent* event)
+{
+    m_staticNick->setText(m_label);
+    m_editNick->setText(m_strNickname);
+    m_editNick->setValidator(new QRegularExpressionValidator(
+        QRegularExpression(m_bSpacesAllowed
+            ? QStringLiteral("[^,]*")
+            : QStringLiteral("[^,\\s]*")), m_editNick));
+    m_editNick->selectAll();
+    QDialog::showEvent(event);
+}
+
+void CNicknameDlg::accept()
+{
+    const QString nickname = m_editNick->text().trimmed();
+    if (nickname.isEmpty()) {
+        QMessageBox::warning(
+            this,
+            originalResourceString(QStringLiteral("ID_MESSAGE_BOX_TITLE")),
+            originalResourceString(QStringLiteral("IDS_BLANKNICK")));
+        m_editNick->setFocus();
+        return;
+    }
+    if (nickname.toLocal8Bit().size() > MAX_NICKINPUT) {
+        m_editNick->setFocus();
+        return;
+    }
+    m_strNickname = nickname;
+    QDialog::accept();
+}
+
+CPasswordDlg::CPasswordDlg(QWidget* parent)
+    : QDialog(parent)
+    , m_message(new QLabel(this))
+    , m_password(new QLineEdit(this))
+{
+    const QString resourceIdentifier = QStringLiteral("IDD_CHANPASSWORD");
+    const OriginalDialogResource dialog = originalDialogResource(
+        resourceIdentifier);
+    QFont dialogFont(dialog.fontFamily);
+    if (dialog.fontPointSize > 0) dialogFont.setPointSize(dialog.fontPointSize);
+    setFont(dialogFont);
+    const DialogUnitMapper mapper(dialogFont);
+    setWindowTitle(dialog.caption);
+    setFixedSize(mapper.x(dialog.width), mapper.y(dialog.height));
+
+    m_message->setWordWrap(true);
+    placeDialogControl(m_message, dialog, mapper,
+                       QStringLiteral("IDC_PASSWORD_MESG"));
+    placeDialogControl(m_password, dialog, mapper,
+                       QStringLiteral("IDC_PASSWORD"));
+    m_password->setEchoMode(QLineEdit::Password);
+    m_password->setMaxLength(MAX_CHANNELPWD);
+
+    auto* ok = new QPushButton(originalDialogControlText(
+        resourceIdentifier, QStringLiteral("IDOK")), this);
+    ok->setDefault(true);
+    placeDialogControl(ok, dialog, mapper, QStringLiteral("IDOK"));
+    auto* cancel = new QPushButton(originalDialogControlText(
+        resourceIdentifier, QStringLiteral("IDCANCEL")), this);
+    placeDialogControl(cancel, dialog, mapper, QStringLiteral("IDCANCEL"));
+    setTabOrder(m_password, ok);
+    setTabOrder(ok, cancel);
+    connect(ok, &QPushButton::clicked, this, &CPasswordDlg::accept);
+    connect(cancel, &QPushButton::clicked, this, &QDialog::reject);
+}
+
+void CPasswordDlg::showEvent(QShowEvent* event)
+{
+    m_message->setText(m_strMessage);
+    m_password->setText(m_strPassword);
+    m_password->selectAll();
+    QDialog::showEvent(event);
+}
+
+void CPasswordDlg::accept()
+{
+    m_strPassword = m_password->text();
+    QDialog::accept();
+}
 
 const char* GetMyName()
 {

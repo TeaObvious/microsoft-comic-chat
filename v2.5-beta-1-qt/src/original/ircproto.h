@@ -95,6 +95,9 @@ public:
     bool bChatSendPrivMesg(const QString& addressee, const QString& annotations,
                            const QString& message, QString* nmText = nullptr,
                            bool asNotice = false, unsigned short modes = 0) override;
+    void TryNewNick(int messageId, const QString& showNick = QString(),
+                    BOOL registerNick = TRUE,
+                    QString* newNick = nullptr);
     bool ChatChangeNick(const QString& newNick);
     bool ChatKickUser(const QString& nickname,
                       const QString& reason) override;
