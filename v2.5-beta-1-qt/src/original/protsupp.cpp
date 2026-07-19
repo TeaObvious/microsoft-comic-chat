@@ -32,7 +32,6 @@
 #include <QByteArray>
 #include <QCheckBox>
 #include <QDateTime>
-#include <QDesktopServices>
 #include <QDir>
 #include <QFileInfo>
 #include <QIcon>
@@ -41,7 +40,6 @@
 #include <QPixmap>
 #include <QPushButton>
 #include <QRegularExpression>
-#include <QUrl>
 
 QMap<QString, CUserInfo*>* g_mapNickToPtr = nullptr;
 QList<CUserInfo*> g_rgpuiWhisperees;
@@ -1032,7 +1030,9 @@ void ShowEmail(CUserInfo* pui, QString address)
             originalResourceString(QStringLiteral("ID_APP_TITLE")),
             originalResourceString(QStringLiteral("IDS_NO_EMAIL_ADDRESS")));
     } else {
-        QDesktopServices::openUrl(QUrl(QStringLiteral("mailto:") + address));
+        const QByteArray command =
+            (QStringLiteral("mailto:") + address).toUtf8();
+        FLaunchBrowser(command.constData());
     }
     pui->DecrementRequestInfo(RF_EMAIL);
 }
@@ -1051,7 +1051,8 @@ void ShowHomePage(CUserInfo* pui, QString url)
         if (!url.startsWith(QStringLiteral("http://"), Qt::CaseInsensitive)) {
             url.prepend(QStringLiteral("http://"));
         }
-        QDesktopServices::openUrl(QUrl(url));
+        const QByteArray encoded = url.toUtf8();
+        FLaunchBrowser(encoded.constData());
     }
     pui->DecrementRequestInfo(RF_HOMEPAGE);
 }

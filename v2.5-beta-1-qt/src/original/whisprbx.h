@@ -54,6 +54,7 @@ public:
     void OnDeleteTab();
     void OnIgnoreWbox();
     void OnContextMenu(const QPoint& screenPoint);
+    BOOL HandleLink(const QString& link);
     void CycleFocus(BOOL backward);
     void SendScrollKey(QKeyEvent* event);
 

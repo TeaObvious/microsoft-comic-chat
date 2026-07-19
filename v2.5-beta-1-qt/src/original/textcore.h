@@ -5,8 +5,10 @@
 
 #include "format.h"
 #include "msgtype.h"
+#include "urlutil.h"
 #include "wincompat.h"
 
+#include <QByteArray>
 #include <QPointer>
 #include <QRect>
 #include <QString>
@@ -162,6 +164,8 @@ private:
                                     BOOL header) const;
     QTextCharFormat formattedChunk(const QTextCharFormat& base,
                                    WORD formatting) const;
+    void RegisterTextLinks(int startPoint, const QByteArray& sourceBytes,
+                           const int* urlBounds, int urlNumber);
     QString sourceText(const char* text, DWORD length) const;
     bool endInView() const;
 
@@ -181,6 +185,7 @@ private:
     BOOL m_bDBCSSystem = FALSE;
     BOOL m_bNewBrowser = TRUE;
     MSG_TYPE m_mtLastMsgType = mtURL;
+    CUrlRec m_urlrec;
 
     std::array<std::array<std::optional<MSG_TYPE_PROP>, mtBeginActions>, msEndEnum>
         m_pMsgTypePropHead;

@@ -15,6 +15,7 @@
 #include <QCheckBox>
 #include <QFontMetrics>
 #include <QPushButton>
+#include <QTextCursor>
 #include <QTextEdit>
 #include <QToolButton>
 #include <QTreeWidgetItem>
@@ -241,6 +242,29 @@ int main(int argc, char** argv)
     REQUIRE(document.m_history.size() == historyBeforeIntercept);
     REQUIRE(box->m_leaves[roomTab]->m_richView->toPlainText()
             .contains(roomMessage));
+
+    const QString sourceUrl = originalResourceString(
+        QStringLiteral("IDS_URL_MSPREFIX"));
+    REQUIRE(sourceUrl.endsWith(QLatin1Char('?')));
+    const QString linkedSourceUrl = sourceUrl.left(sourceUrl.size() - 1);
+    roomUser->m_udi.Reset();
+    roomUser->m_bbValidUDI = 0;
+    ProcessSay(&document, roomUser, sourceUrl, MT_PRIVATEMSG);
+    QTextEdit* roomWhisperView = box->m_leaves[roomTab]->m_richView;
+    const int whisperUrlStart = roomWhisperView->toPlainText().lastIndexOf(
+        sourceUrl);
+    REQUIRE(whisperUrlStart >= 0);
+    QTextCursor whisperUrl(roomWhisperView->document());
+    whisperUrl.setPosition(whisperUrlStart);
+    whisperUrl.movePosition(QTextCursor::NextCharacter,
+                            QTextCursor::KeepAnchor);
+    REQUIRE(whisperUrl.charFormat().isAnchor());
+    REQUIRE(whisperUrl.charFormat().anchorHref() == linkedSourceUrl);
+    QTextCursor whisperTerminator(roomWhisperView->document());
+    whisperTerminator.setPosition(whisperUrlStart + linkedSourceUrl.size());
+    whisperTerminator.movePosition(QTextCursor::NextCharacter,
+                                   QTextCursor::KeepAnchor);
+    REQUIRE(!whisperTerminator.charFormat().isAnchor());
 
     // A real external PUI creates a tab without being redirected to a room.
     const QString externalNick = commandName(cmdidAway);

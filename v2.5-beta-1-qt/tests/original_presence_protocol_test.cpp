@@ -194,6 +194,38 @@ int main(int argc, char** argv)
             == QStringLiteral("NOTICE %1 :\001CLIENTINFO ACTION AWAY CLIENTINFO DCC EMAIL NETMEET PING SOUND TIME USERINFO URL VERSION\001\r\n")
                    .arg(otherAvatarName));
 
+    protocol.ReplyEmail(other);
+    REQUIRE(protocol.sent.last()
+            == QStringLiteral("NOTICE %1 :\001EMAIL %2\001\r\n")
+                   .arg(otherAvatarName, QString::fromUtf8(GetMyEmail())));
+
+    const QString sourceHomePage = originalResourceString(
+        QStringLiteral("IDS_URL_MSPREFIX"));
+    REQUIRE(!sourceHomePage.isEmpty());
+    const QString savedHomePage = QString::fromUtf8(GetMyHomePage());
+    SetMyHomePage(sourceHomePage);
+    protocol.ReplyHomePage(other);
+    REQUIRE(protocol.sent.last()
+            == QStringLiteral("NOTICE %1 :\001URL %2\001\r\n")
+                   .arg(otherAvatarName, sourceHomePage));
+
+    const qsizetype sentBeforeHomePageRequest = protocol.sent.size();
+    protocol.ChatGetHomePage(other);
+    REQUIRE(protocol.sent.size() == sentBeforeHomePageRequest + 1);
+    REQUIRE(protocol.sent.last()
+            == QStringLiteral("PRIVMSG %1 :\001URL\001\r\n")
+                   .arg(otherAvatarName));
+    REQUIRE(other->IsRequestInfo(RF_HOMEPAGE));
+    ProcessSay(&document, other,
+               QStringLiteral("\001URL %1\001").arg(sourceHomePage),
+               MT_PRIVATEMSG | MT_NOTICE);
+    REQUIRE(!other->IsRequestInfo(RF_HOMEPAGE));
+    ProcessSay(&document, other,
+               QStringLiteral("\001URL %1\001").arg(sourceHomePage),
+               MT_PRIVATEMSG | MT_NOTICE);
+    REQUIRE(!other->IsRequestInfo(RF_HOMEPAGE));
+    SetMyHomePage(savedHomePage);
+
     for (CUserInfo* pui : document.m_allChannelPuis) {
         if (pui) {
             if (CAvatarX* avatar = GetAvatar(pui->GetAvatarID())) {

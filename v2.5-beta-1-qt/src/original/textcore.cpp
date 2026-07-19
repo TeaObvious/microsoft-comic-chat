@@ -4,6 +4,7 @@
 
 #include "textcore.h"
 
+#include "ccommon.h"
 #include "originalassets.h"
 
 #include <QApplication>
@@ -480,9 +481,12 @@ INT CTextCore::iDisplayMsgText(const char* text, DWORD textLength,
                                INT highlightIndex, DWORD* formatting,
                                INT formatCount)
 {
-    Q_UNUSED(showURLs);
     if (!m_textView || !text) return -1;
-    const QString value = sourceText(text, textLength);
+    const int sourceLength = textLength
+        ? static_cast<int>(textLength)
+        : static_cast<int>(std::strlen(text));
+    const QByteArray sourceBytes(text, sourceLength);
+    const QString value = QString::fromUtf8(sourceBytes);
     QTextCursor saved = m_textView->textCursor();
     const bool restoreSelection = saved.hasSelection()
         || saved.position() != static_cast<int>(m_dwBuffSize);
@@ -531,6 +535,7 @@ INT CTextCore::iDisplayMsgText(const char* text, DWORD textLength,
         base = effectiveFormat(type, member, FALSE);
     }
     m_mtLastMsgType = type;
+    const int textStart = cursor.position();
 
     if (!formatting) {
         cursor.insertText(value, base);
@@ -560,6 +565,16 @@ INT CTextCore::iDisplayMsgText(const char* text, DWORD textLength,
         cursor.insertText(value, base);
     }
 
+    if (showURLs) {
+        int urlBounds[MAX_URL_INTEXT * 2]{};
+        int urlNumber = MAX_URL_INTEXT;
+        m_urlrec.HrIdentifyUrls(sourceBytes.constData(), urlBounds,
+                               &urlNumber);
+        if (urlNumber > 0) {
+            RegisterTextLinks(textStart, sourceBytes, urlBounds, urlNumber);
+        }
+    }
+
     m_dwBuffSize = static_cast<DWORD>(m_textView->toPlainText().size());
     int result = informFull && bIsTextViewBufferGettingFull() ? 1 : 0;
     if (restoreSelection) m_textView->setTextCursor(saved);
@@ -569,6 +584,34 @@ INT CTextCore::iDisplayMsgText(const char* text, DWORD textLength,
             m_textView->verticalScrollBar()->maximum());
     m_bLastAutoScroll = scroll;
     return result;
+}
+
+void CTextCore::RegisterTextLinks(int startPoint,
+                                  const QByteArray& sourceBytes,
+                                  const int* urlBounds, int urlNumber)
+{
+    if (!m_textView || !urlBounds || urlNumber <= 0) return;
+    for (int index = urlNumber - 1; index >= 0; --index) {
+        const int byteStart = qBound(0, urlBounds[index * 2],
+                                     sourceBytes.size());
+        const int byteEnd = qBound(byteStart, urlBounds[index * 2 + 1],
+                                   sourceBytes.size());
+        const int characterStart = QString::fromUtf8(
+            sourceBytes.constData(), byteStart).size();
+        const int characterEnd = QString::fromUtf8(
+            sourceBytes.constData(), byteEnd).size();
+        if (characterEnd <= characterStart) continue;
+
+        QTextCursor linkCursor(m_textView->document());
+        linkCursor.setPosition(startPoint + characterStart);
+        linkCursor.setPosition(startPoint + characterEnd,
+                               QTextCursor::KeepAnchor);
+        QTextCharFormat linkFormat = m_URLMsgTypeProp.CharFormat;
+        linkFormat.setAnchor(true);
+        linkFormat.setAnchorHref(QString::fromUtf8(
+            sourceBytes.constData() + byteStart, byteEnd - byteStart));
+        linkCursor.mergeCharFormat(linkFormat);
+    }
 }
 
 INT CTextCore::iDisplayMemberStatus(const char* nickname, DWORD nameLength,
@@ -701,10 +744,15 @@ INT CTextCore::iDisplayInfo(const char* from, DWORD fromLength,
 
 BOOL CTextCore::bHandleLink(const QString& link)
 {
-    Q_UNUSED(link);
-    // The original delegates to CUrlRec. url.* and urlfind.cpp are audited and
-    // ported separately; no QDesktopServices replacement is inferred here.
-    return FALSE;
+    QString url = link.left(g_nMaxLength - 1);
+    while (!url.isEmpty()
+           && (url.endsWith(QLatin1Char('\r'))
+               || url.endsWith(QLatin1Char('\n'))
+               || url.endsWith(QLatin1Char(' ')))) {
+        url.chop(1);
+    }
+    const QByteArray encoded = url.toUtf8();
+    return m_urlrec.bLaunchUrl(encoded.constData(), m_bNewBrowser);
 }
 
 BOOL CTextCore::bSetDefaultMsgTypeProperties()

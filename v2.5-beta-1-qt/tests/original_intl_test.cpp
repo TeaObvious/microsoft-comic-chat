@@ -120,6 +120,21 @@ int main(int argc, char** argv)
     check(IntlTextToQString(native.constData(), native.size()) == hiragana,
           "Shift-JIS to QString adapter differs");
 
+    const char sourceHotLinkIdentifier = native.at(1);
+    QByteArray dbcsHotLink = native;
+    dbcsHotLink.append(sourceHotLinkIdentifier);
+    dbcsHotLink.append(native);
+    dbcsHotLink.append(sourceHotLinkIdentifier);
+    CDWordArray* dbcsHotLinkFormatting = MarkHotLinks(
+        nullptr, dbcsHotLink.data(), sourceHotLinkIdentifier);
+    check(QByteArray(dbcsHotLink.constData()) == native + native
+              && dbcsHotLinkFormatting
+              && dbcsHotLinkFormatting->GetSize() == 2
+              && dbcsHotLinkFormatting->GetAt(0) == MAKELONG(wLink, 2)
+              && dbcsHotLinkFormatting->GetAt(1) == MAKELONG(0, 4),
+          "MarkHotLinks treats a CP932 trail byte as a delimiter");
+    FreeAndNullFormatting(&dbcsHotLinkFormatting);
+
     const QByteArray utf8 = QByteArrayLiteral("A")
         + QByteArray::fromHex("e38182") + QByteArrayLiteral("B");
     CDWordArray utf8Formatting;

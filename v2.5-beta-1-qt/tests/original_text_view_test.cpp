@@ -288,6 +288,30 @@ int main(int argc, char** argv)
         firstMessageCharacter.movePosition(QTextCursor::NextCharacter,
                                            QTextCursor::KeepAnchor);
         REQUIRE(firstMessageCharacter.charFormat().fontWeight() == QFont::Bold);
+
+        textView.ClearTextView();
+        const QString sourceUrl = originalResourceString(
+            QStringLiteral("IDS_URL_MSPREFIX"));
+        REQUIRE(sourceUrl.endsWith(QLatin1Char('?')));
+        const QString linkedSourceUrl = sourceUrl.left(sourceUrl.size() - 1);
+        const QByteArray sourceUrlBytes = sourceUrl.toUtf8();
+        textView.TextLine(&sender, nullptr, nullptr,
+                          sourceUrlBytes.constData(), BM_SAY,
+                          0, nullptr, -1);
+        const QString urlOutput = textView.m_pRichEdit->toPlainText();
+        const int urlStart = urlOutput.indexOf(sourceUrl);
+        REQUIRE(urlStart >= 0);
+        QTextCursor linkedCharacter(textView.m_pRichEdit->document());
+        linkedCharacter.setPosition(urlStart);
+        linkedCharacter.movePosition(QTextCursor::NextCharacter,
+                                     QTextCursor::KeepAnchor);
+        REQUIRE(linkedCharacter.charFormat().isAnchor());
+        REQUIRE(linkedCharacter.charFormat().anchorHref() == linkedSourceUrl);
+        QTextCursor terminatingCharacter(textView.m_pRichEdit->document());
+        terminatingCharacter.setPosition(urlStart + linkedSourceUrl.size());
+        terminatingCharacter.movePosition(QTextCursor::NextCharacter,
+                                           QTextCursor::KeepAnchor);
+        REQUIRE(!terminatingCharacter.charFormat().isAnchor());
     }
 
     g_mapNickToPtr->clear();

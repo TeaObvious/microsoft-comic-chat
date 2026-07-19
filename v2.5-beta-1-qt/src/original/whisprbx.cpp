@@ -22,6 +22,7 @@
 #include <QIcon>
 #include <QKeyEvent>
 #include <QMenu>
+#include <QMouseEvent>
 #include <QMoveEvent>
 #include <QPainter>
 #include <QPushButton>
@@ -255,12 +256,34 @@ public:
         setAcceptRichText(true);
         setUndoRedoEnabled(false);
         setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        viewport()->setMouseTracking(true);
     }
 
 protected:
     void contextMenuEvent(QContextMenuEvent* event) override
     {
         if (m_owner) m_owner->OnContextMenu(event->globalPos());
+    }
+
+    void mouseMoveEvent(QMouseEvent* event) override
+    {
+        viewport()->setCursor(anchorAt(event->position().toPoint()).isEmpty()
+                                  ? Qt::IBeamCursor
+                                  : Qt::PointingHandCursor);
+        QTextEdit::mouseMoveEvent(event);
+    }
+
+    void mousePressEvent(QMouseEvent* event) override
+    {
+        if (event->button() == Qt::LeftButton
+            && !(event->modifiers() & Qt::ControlModifier)) {
+            const QString link = anchorAt(event->position().toPoint());
+            if (!link.isEmpty() && m_owner && m_owner->HandleLink(link)) {
+                event->accept();
+                return;
+            }
+        }
+        QTextEdit::mousePressEvent(event);
     }
 
 private:
@@ -528,6 +551,14 @@ void CWhisperBox::OnContextMenu(const QPoint& screenPoint)
             if (QTextEdit* edit = GetCurrentEdit()) edit->copy();
         }
     }
+}
+
+BOOL CWhisperBox::HandleLink(const QString& link)
+{
+    if (m_currentIndex < 0 || m_currentIndex >= m_leaves.size()) return FALSE;
+    CWhisperLeaf* leaf = m_leaves[m_currentIndex];
+    return leaf && leaf->m_richCore
+        ? leaf->m_richCore->bHandleLink(link) : FALSE;
 }
 
 void CWhisperBox::CycleFocus(BOOL backward)

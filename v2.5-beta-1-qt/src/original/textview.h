@@ -15,6 +15,7 @@ class QContextMenuEvent;
 class QFocusEvent;
 class QKeyEvent;
 class QMenu;
+class QMouseEvent;
 class QPoint;
 class QPainter;
 class QPrinter;
@@ -30,6 +31,8 @@ protected:
     void contextMenuEvent(QContextMenuEvent* event) override;
     void focusOutEvent(QFocusEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
 
 private:
     CTextView* m_owner = nullptr;

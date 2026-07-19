@@ -24,6 +24,7 @@
 #include <QKeyEvent>
 #include <QLocale>
 #include <QMenu>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QTextCursor>
 #include <QTextDocument>
@@ -242,6 +243,7 @@ CTextEdit::CTextEdit(CTextView* owner)
     setAcceptRichText(true);
     setUndoRedoEnabled(false);
     setLineWrapMode(QTextEdit::WidgetWidth);
+    viewport()->setMouseTracking(true);
 }
 
 void CTextEdit::contextMenuEvent(QContextMenuEvent* event)
@@ -281,6 +283,28 @@ void CTextEdit::keyPressEvent(QKeyEvent* event)
         }
     }
     QTextEdit::keyPressEvent(event);
+}
+
+void CTextEdit::mouseMoveEvent(QMouseEvent* event)
+{
+    viewport()->setCursor(anchorAt(event->position().toPoint()).isEmpty()
+                              ? Qt::IBeamCursor
+                              : Qt::PointingHandCursor);
+    QTextEdit::mouseMoveEvent(event);
+}
+
+void CTextEdit::mousePressEvent(QMouseEvent* event)
+{
+    if (event->button() == Qt::LeftButton
+        && !(event->modifiers() & Qt::ControlModifier)) {
+        const QString link = anchorAt(event->position().toPoint());
+        if (!link.isEmpty() && m_owner
+            && m_owner->m_textCore.bHandleLink(link)) {
+            event->accept();
+            return;
+        }
+    }
+    QTextEdit::mousePressEvent(event);
 }
 
 CTextView::CTextView(CChatDoc* document, QWidget* parent)

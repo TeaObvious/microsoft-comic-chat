@@ -14,6 +14,7 @@
 #include "traj.h"
 #include "vector2d.h"
 
+#include <QByteArray>
 #include <QFontDatabase>
 #include <QFontMetrics>
 #include <QImage>
@@ -1175,9 +1176,75 @@ char* CBWoodringNormal::SplitHeight(int height, CDWordArray** restFormatting,
     std::free(m_str);
     m_str = newText;
     if (m_prgdwFormatting) {
+        BOOL firstRestCharacterNotUrl = FALSE;
+        m_prgdwFormatting = CutFormattingArray(
+            m_prgdwFormatting, static_cast<SHORT>(copyLength + 1));
+        if (m_prgdwFormatting) {
+            const DWORD last = m_prgdwFormatting->GetAt(
+                m_prgdwFormatting->GetUpperBound());
+            firstRestCharacterNotUrl = !(LOWORD(last) & wLink)
+                && HIWORD(last) == copyLength;
+        }
         m_prgdwFormatting = CutFormattingArray(m_prgdwFormatting,
                                                static_cast<SHORT>(copyLength));
         if (m_prgdwFormatting) {
+            const DWORD last = m_prgdwFormatting->GetAt(
+                m_prgdwFormatting->GetUpperBound());
+            if ((LOWORD(last) & wLink) && !firstRestCharacterNotUrl
+                && urlStartInRest && restFormatting && *restFormatting
+                && m_prgszURLs) {
+                DWORD lastUrlStart = 0;
+                BOOL inUrl = FALSE;
+                BOOL foundUrlStart = FALSE;
+                for (int index = 0;
+                     index <= m_prgdwFormatting->GetUpperBound(); ++index) {
+                    const DWORD element = m_prgdwFormatting->GetAt(index);
+                    if (!inUrl && (LOWORD(element) & wLink)) {
+                        inUrl = TRUE;
+                        foundUrlStart = TRUE;
+                        lastUrlStart = element;
+                    } else if (inUrl && !(LOWORD(element) & wLink)) {
+                        inUrl = FALSE;
+                    }
+                }
+
+                int firstUrlEndIndex = -1;
+                DWORD firstUrlEnd = 0;
+                for (int index = 0;
+                     index <= (*restFormatting)->GetUpperBound(); ++index) {
+                    const DWORD element = (*restFormatting)->GetAt(index);
+                    if (!(LOWORD(element) & wLink)) {
+                        firstUrlEndIndex = index;
+                        firstUrlEnd = element;
+                        break;
+                    }
+                }
+
+                if (foundUrlStart && firstUrlEndIndex > 0) {
+                    QByteArray partialUrl(m_str + HIWORD(lastUrlStart));
+                    const int firstContinuationLength =
+                        static_cast<int>(std::strlen(continuation1));
+                    if (partialUrl.size() >= firstContinuationLength) {
+                        partialUrl.chop(firstContinuationLength);
+                    }
+                    partialUrl.append(
+                        rest + std::strlen(continuation2),
+                        HIWORD(firstUrlEnd));
+
+                    for (int index = 0; index < MAX_URL_INTEXT; ++index) {
+                        if (!m_prgszURLs[index]) continue;
+                        QByteArray candidate(m_prgszURLs[index]);
+                        Capitalize(candidate.data());
+                        if (!candidate.contains(partialUrl)) continue;
+                        const int length = static_cast<int>(
+                            std::strlen(m_prgszURLs[index]));
+                        *urlStartInRest = new char[length + 1];
+                        std::memcpy(*urlStartInRest, m_prgszURLs[index],
+                                    static_cast<size_t>(length + 1));
+                        break;
+                    }
+                }
+            }
             m_prgdwFormatting->Add(MAKELONG(0, static_cast<WORD>(copyLength)));
         }
     }

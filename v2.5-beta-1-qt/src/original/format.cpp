@@ -739,9 +739,14 @@ CDWordArray* MarkHotLinks(CDWordArray* formatting, char* message, char identifie
             }
             ++source;
         } else if (destination) {
+            if (iBytesofChar(static_cast<BYTE>(*source)) == 2
+                && source[1] != '\0') {
+                *(destination++) = *(source++);
+            }
             *(destination++) = *(source++);
         } else {
-            ++source;
+            source += iBytesofChar(static_cast<BYTE>(*source)) == 2
+                    && source[1] != '\0' ? 2 : 1;
         }
     }
     if (destination) {
