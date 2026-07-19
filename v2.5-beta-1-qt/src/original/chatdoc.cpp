@@ -30,6 +30,7 @@
 #include <QTextStream>
 #include <QTimer>
 #include <QWidget>
+#include <QtGlobal>
 
 #include <cstring>
 
@@ -270,6 +271,7 @@ void CChatDoc::InitMyDocument()
     const QByteArray defaultArtDirectory = theApp.m_strDefaultArtDir.toLocal8Bit();
     SetArtDir(defaultArtDirectory.constData());
     if (!m_bComicView) return;
+    Q_ASSERT(m_pages.isEmpty());
     AddNewPage();
     if (!m_pages.isEmpty()) {
         const QByteArray title = IntlTextFromQString(
@@ -709,8 +711,8 @@ void SetChatDoc(CChatDoc* doc)
 {
     g_doc = doc;
     if (doc) {
-        doc->InitMyDocument();
         doc->LoadDocData();
+        doc->InitMyDocument();
     } else {
         currentRoom = nullptr;
         g_puiSelf = nullptr;

@@ -55,10 +55,12 @@ int main(int argc, char** argv)
             QStringLiteral("IDS_DEFAULT_NICK"));
         const QString channel = originalResourceString(
             QStringLiteral("IDS_DEFAULT_CHANNEL"));
+        const QString server = originalResourceString(
+            QStringLiteral("IDS_DEFAULT_SERVER"));
         const QString user = QString::fromUtf8(GetMyUserName());
         serverConn.ProcessMessage(
-            QStringLiteral(":%1!%2@NoMachine JOIN :%3")
-                .arg(nick, user, channel));
+            QStringLiteral(":%1!%2@%3 JOIN :%4")
+                .arg(nick, user, server, channel));
         application.processEvents();
 
         CChatDoc* roomDocument = LookupDoc(channel);
@@ -79,22 +81,53 @@ int main(int argc, char** argv)
         frame.show();
         application.processEvents();
 
+        REQUIRE(roomDocument->m_pages.size() == 1);
+        CPage* titlePage = roomDocument->m_pages.first();
+        REQUIRE(titlePage != nullptr);
+        REQUIRE(titlePage->m_panels.size() == 1);
+        CPanel* titlePanel = titlePage->m_panels.first();
+        REQUIRE(titlePanel != nullptr);
+        REQUIRE(titlePanel->m_elements.size() == 2);
+        REQUIRE(roomDocument->m_view != nullptr);
+        REQUIRE(roomDocument->m_view->viewport()->size().width() > 0);
+        REQUIRE(roomDocument->m_view->viewport()->size().height() > 0);
+        QImage beforeNames(roomDocument->m_view->viewport()->size(),
+                           QImage::Format_RGB32);
+        beforeNames.fill(Qt::white);
+        roomDocument->m_view->viewport()->render(&beforeNames);
+
         QString sourceAvatar;
         GetNextAvatarName(sourceAvatar);
         REQUIRE(!sourceAvatar.isEmpty());
         serverConn.ProcessMessage(
-            QStringLiteral("353 %1 = %2 :%1 %3")
-                .arg(nick, channel, sourceAvatar));
-        serverConn.ProcessMessage(
-            QStringLiteral("366 %1 %2").arg(nick, channel));
+            QStringLiteral(":%1 353 %2 = %3 :%2 %4")
+                .arg(server, nick, channel, sourceAvatar));
         application.processEvents();
-        REQUIRE(roomDocument->m_view != nullptr);
-        REQUIRE(roomDocument->m_view->viewport()->size().width() > 0);
-        REQUIRE(roomDocument->m_view->viewport()->size().height() > 0);
+        REQUIRE(roomDocument->m_pages.size() == 1);
+        REQUIRE(roomDocument->m_pages.first() == titlePage);
+        REQUIRE(titlePage->m_panels.size() == 1);
+        REQUIRE(titlePage->m_panels.first() == titlePanel);
+        REQUIRE(titlePanel->m_elements.size() == 2);
+        REQUIRE(roomDocument->m_puiSelf != nullptr);
+        REQUIRE(roomDocument->m_mapNickToPtr.size() == 2);
+
+        serverConn.ProcessMessage(
+            QStringLiteral(":%1 366 %2 %3").arg(server, nick, channel));
+        application.processEvents();
+        REQUIRE(roomDocument->m_pages.size() == 1);
+        REQUIRE(roomDocument->m_pages.first() == titlePage);
+        REQUIRE(titlePage->m_panels.size() == 1);
+        REQUIRE(titlePage->m_panels.first() == titlePanel);
+        REQUIRE(titlePanel->m_elements.size() == 6);
+        REQUIRE(dynamic_cast<CBodyUnary*>(titlePanel->m_elements[2]) != nullptr);
+        REQUIRE(dynamic_cast<CStarLabel*>(titlePanel->m_elements[3]) != nullptr);
+        REQUIRE(dynamic_cast<CBodyUnary*>(titlePanel->m_elements[4]) != nullptr);
+        REQUIRE(dynamic_cast<CStarLabel*>(titlePanel->m_elements[5]) != nullptr);
         QImage initialComic(roomDocument->m_view->viewport()->size(),
                             QImage::Format_RGB32);
         initialComic.fill(Qt::white);
         roomDocument->m_view->viewport()->render(&initialComic);
+        REQUIRE(initialComic != beforeNames);
         bool hasSourceDrawing = false;
         for (int y = 0; y < initialComic.height() && !hasSourceDrawing; ++y) {
             const QRgb* row = reinterpret_cast<const QRgb*>(

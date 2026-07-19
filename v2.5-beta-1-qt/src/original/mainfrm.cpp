@@ -208,7 +208,13 @@ CChildFrame* CMainFrame::AddDocument(CChatDoc* document, bool ownsDocument,
         return existing;
     }
 
+    // MFC calls CChatDoc::OnNewDocument/InitMyDocument before it creates the
+    // child view and supplies that document through CCreateContext.  Keep the
+    // same ordering and context while the Qt child constructs its controls.
+    CChatDoc* previousDocument = GetChatDoc();
+    SetChatDoc(document);
     auto* frame = new CChildFrame(document, ownsDocument, m_mdiArea);
+    if (previousDocument != document) SetChatDoc(previousDocument);
     m_mdiArea->addSubWindow(frame);
     m_childFrames.insert(document, frame);
     connect(frame, &QObject::destroyed, this,

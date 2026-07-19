@@ -62,13 +62,12 @@ synchronized with the active work package and its verified handoff state:
 > integration are deferred and non-gating. Do not implement Qt substitutes for
 > those deferred facilities unless the user explicitly changes this scope.
 >
-> Next work package: begin fixed priority 3 by auditing the unresolved
-> menu, submenu, accelerator, toolbar, status-bar, child-frame, focus, and
-> command-UI behavior in `chat.rc`, `resource.h`, `mainfrm.*`, `chat.*`,
-> `chatdoc.*`, `chatview.*`, `childfrm.*`, `chatbars.*`, and `coolbar.*`.
-> Establish the exact resource/message-map command matrix and acceptance
-> boundary before changing code; do not infer enable/check/focus behavior from
-> generic desktop UI conventions. The required non-deferred Comic Chat
+> Next work package: execute the ordered stages in
+> `Planned work block: Main UI resource, routing, and focus parity`. Its
+> resource/message-map command matrix, deferred boundary, source owners, test
+> assignments, and acceptance gates are the implementation contract. Do not
+> infer enable/check/focus behavior from generic desktop UI conventions. The
+> required non-deferred Comic Chat
 > CTCP/comment/URL slice is complete. DCC remains the separate priority-4
 > `filesend.*` package, while Sound, NetMeeting, and platform shell integration
 > remain deferred and must not receive substitute effects.
@@ -182,6 +181,334 @@ synchronized with the active work package and its verified handoff state:
   files, CTest still reports all 45 names independently, and each invocation
   starts a fresh process so Qt application and global Comic Chat state cannot
   leak between cases.
+
+### Completed work block: Starring document/view lifecycle regression
+
+Source contract and observed failure:
+
+- Original `chatdoc.cpp::OnNewDocument` calls `InitMyDocument` before MFC
+  creates the document view. `InitMyDocument` requires an empty page list,
+  creates exactly one initial `CPage`, and adds its title panel.
+- Original `chatview.cpp::CreateComicView(FALSE)` creates and attaches the
+  controls without clearing or rebuilding the document pages. Only a later
+  Comic/Text mode reconstruction replays history and rebuilds the page model.
+- The Qt MDI path constructs `CChildFrame` and therefore `CChatView` before
+  `OnMDIActivate` calls `SetChatDoc`. The initial `CreateComicView(false)`
+  unconditionally calls `ResetExistingPanels(true)`, creating one title page;
+  the later `SetChatDoc -> InitMyDocument` prepends a second title page.
+- Runtime inspection after real `353` and `366` confirms that
+  `ProcessEndEnumeration -> CPage::UpdateTitle -> AddStars -> AddStarsAux`
+  places both real enumerated users in the first title panel. The document
+  nevertheless contains two pages. `CPageView::paintEvent` draws both in
+  original list order at the same source-defined panel rectangle, so the
+  later empty title page covers the populated Starring panel. Message panels
+  remain visible because they are added to that later page.
+- This is a document/view lifecycle regression, not evidence for changing IRC
+  parsing, NAMES query lifetime, Starring construction, page paint order, or
+  panel geometry. Those source-defined paths must remain unchanged.
+
+Implemented source-equivalent repair:
+
+1. `mainfrm.cpp::AddDocument` establishes the new document as the current
+   document and runs `InitMyDocument` before constructing `CChildFrame`, then
+   restores the preceding document context until normal MDI activation. This
+   mechanically replaces MFC's `OnNewDocument`/`CCreateContext` ordering.
+2. `chatview.cpp::CreateComicView(false)` attaches the initial page view
+   without `ResetExistingPanels`; `CreateComicView(true)` retains the
+   source-defined reconstruction path for an explicit view-mode change.
+3. `chatdoc.cpp::InitMyDocument` retains the original empty-page precondition
+   as an assertion, and `SetChatDoc` loads the target context before running
+   that initialization. No page is merged, discarded, reordered, or
+   manufactured to conceal a lifecycle error.
+4. `original_mdi_join_test.cpp` uses a server-prefixed source-derived
+   JOIN/NAMES/end-of-NAMES sequence and proves that the MDI room has exactly
+   one unchanged page and one unchanged title panel before, during, and after
+   enumeration; no stars exist before `366`, and after `366` the same panel
+   contains only the two real enumerated users and produces a changed visible
+   rendering.
+
+Definition of repaired:
+
+- A newly created comic MDI room has exactly one title page before `353`.
+- `353` changes only real user/member state and does not add Starring entries.
+- `366` updates that same title page through `ProcessEndEnumeration`, with one
+  avatar body and one `CStarLabel` per real enumerated user.
+- The populated Starring panel is visible in the next Qt event cycle without
+  a click, message, timer, duplicate page, fake participant, or paint-order
+  exception.
+- Initial creation and Comic/Text reconstruction regressions, the complete
+  CTest set, Debug and Release builds, isolated offscreen startup,
+  `git diff --check`, and the dummy-content/path scan all pass.
+
+Verification record:
+
+- `original-mdi-join`, `original-join-starring`, `original-comic-send`,
+  `original-history`, `original-page-iteration`, and `original-comic-core`
+  pass as focused regressions.
+- The canonical Debug build and the Release build complete. The complete
+  Debug and Release CTest sets each pass 45/45 cases.
+- Isolated offscreen startup remains alive through its intentional
+  three-second timeout. CLion reports no diagnostics in the four changed C++
+  files. `git diff --check`, the changed-code dummy-content scan, and the
+  tracked-document absolute-path scan pass.
+
+### Planned work block: Main UI resource, routing, and focus parity
+
+Planning state and boundary:
+
+- This section is an implementation contract only. The corresponding TODO
+  remains unchecked, and adding this plan changes no production or test code.
+- `v2.5-beta-1-modern/chat.rc`, `resource.h`, and the original message maps are
+  authoritative. Screenshots, Qt defaults, generic MDI conventions, and
+  expected IRC-client behavior are not evidence.
+- Qt replaces MFC command routing, Win32 controls, and MDI mechanics only.
+  Original command IDs, resource order, class ownership, handler names, state
+  predicates, focus order, and side effects remain the contract.
+- No generic command-bus module or renamed UI architecture is planned.
+  Source-equivalent work stays in the original files and classes. Resource
+  parsing and fixed platform presentation remain in `src/qt/originalassets.*`
+  and `src/qt/win98palette.*`.
+- Dialog commands in this block must call the existing original-named dialog
+  entry point. Full control-by-control parity inside Settings, Profile, room
+  list, user list, and other canonical dialogs remains governed by the
+  separate dialog TODO.
+- Conversation-file persistence, printer-specific behavior, DCC, and the
+  explicitly deferred platform facilities are excluded as listed below. An
+  excluded command keeps its exact resource position and text but must not
+  gain a placeholder, invented Qt substitute, or unrelated side effect.
+
+#### Resource inventory to preserve
+
+| Resource surface | Exact source inventory | Original owner and interaction |
+|---|---|---|
+| Main menu | `IDR_MAINFRAME`: nine top-level popups in this order: File, Edit, View, Format, Room, Member, Favorites, Window, Help. Every nested popup, separator, caption, mnemonic, and displayed shortcut comes from `chat.rc`. | MFC routes control/view/document/frame/application commands through the message maps in `rtfctrl.*`, `saywnd.*`, `pageview.*`, `textview.*`, `status.*`, `memblst.*`, `bodycam.*`, `chatdoc.*`, `childfrm.*`, `mainfrm.*`, and `chat.*`. |
+| Main toolbar | `IDR_MAINFRAME`, direct `res/toolbar.bmp`, 16x16 cells: Connect, Disconnect, Enter Room, Leave Room, Create Room; separator; Comic, Text; separator; Room List, User List; separator; Favorites. | `CChatToolBar::Create`, `OnPrepareToolBar`, `CChatApp::OnToolBarDropDown`; Favorites is a dropdown, Comic/Text is a check group, and Room List starts a group. |
+| Text toolbar | `IDR_TEXTTOOLBAR`, direct `res/texttool.bmp`, 16x16 cells: Font, Color, Bold, Italic, Underline, Fixed Pitch, Symbol. | `CChatToolBar::OnPrepareToolBar`, `CChatDoc::OnSetfont`/format handlers, `CSayWnd::SetFormattingToolBarInfo`, `CRtfCtrl::MatchButtonsToSelection`; the five style actions are checks, while Font and Color are not. |
+| Member toolbar | `IDR_USERTOOLBAR`, direct `res/usertool.bmp`, 16x16 cells: Away, Get Identity, Ignore, Whisper Box; separator; Send E-mail, Visit Home Page, NetMeeting. | `CChatToolBar::OnPrepareToolBar` makes Away a check; all other enable/check rules come from the owning application/document update handlers. |
+| Context menus | `IDR_BODYCONTEXT`, `IDR_IRC_MEMBER`, `IDR_MEMBERCONTEXT`, `IDR_ADMIN`, `IDR_VIEWCONTEXT`, both popups of `IDR_FORMATTING`, `IDR_MEMBERADMIN`, `IDR_STATUSVIEW`, and `IDR_TOOLBARCONTEXT`. | `CBodyCam::OnContextMenu`; `ShowMemberContext`/`CMemberList::OnContextMenu`; `CChatDoc::InsertAdminMenu`; `CPageView::OnContextMenu`; `CTextView::LoadContextMenu`; `CRtfCtrl::ShowFormattingPopUp`; `CStatusView::LoadContextMenu`; `CWhisperBox::OnContextMenu`; `CChatToolBar::OnContextMenu`. Whisper removes `ID_CLEAR_HISTORY` from `IDR_STATUSVIEW`, exactly as the source does. |
+| Frame accelerators | All 31 entries of `IDR_MAINFRAME`: Alt+0 through Alt+9, the source-defined Ctrl letter commands, Alt+Backspace, Shift+Delete, Ctrl+Insert, and Shift+Insert. | Frame/application command routing must decide whether the resolved handler is available. `ID_VIEW_MACROS` on Ctrl+M has a resource string and accelerator but no original message-map handler; it must remain a source-defined no-op unless further original source evidence establishes a target. |
+| Rich-edit accelerators | All six entries of `IDR_RTFACCEL`: Ctrl+F/U/D/K/I/B. | `CAccelTable::Lookup` and `CRtfCtrl::OnKeyDown` apply formatting only to the owning editable RichEdit path and consume a matched key once. |
+| Whisper accelerators | All three entries of `IDR_WHISPERACCEL`: Ctrl+W, Ctrl+E, Ctrl+G. | `CSayCtrl::OnKeyDown` routes them to the Whisper `CSayWnd`; Ctrl+G is excluded with Sound, while Ctrl+W and Ctrl+E retain the original Whisper/Whisper Action meanings. Alt+0 through Alt+9 in `CWhisperBox::PreTranslateMessage` invoke macros with the Whisper flag. |
+| Status bar | Two `ID_SEPARATOR` panes; pane 0 is connection/status text and pane 1 is the member count with width from `IDS_MEMBER_COUNT_WIDTH`. | `CMainFrame::OnCreate`, `GetMessageString`, `OnMenuSelect`; `CChatApp::SetStatusPaneString`; `CChatDoc::SaveConnectStatus` and `ResetStatus`; protocol `UpdateStatus` calls. Menu help uses the first line of each command string, toolbar tips use the second line, and macro items 1-9 use `ID_MACRO_A0` status help. |
+| Tab/child-frame surface | `IDB_TABS`, `IDS_TABTITLE`, `IDR_MAINFRAME` child-frame resource, and MDI default Window commands. | `CChildFrame::OnMDIActivate`, `ActivateFrame`, `OnClose`, `OnCreate`, `OnDestroy`, `OnWindowPosChanging`, `OnWindowPosChanged`, `UpdateMDITab`, `OnUpdateFrameMenu`; `CTabBar` activation, sorting, icons, keyboard handling; `CMainFrame` cascade/tile/auto-tile behavior. |
+
+The main-menu command groups that the command manifest must cover are:
+
+| Popup | Commands in resource order | Primary source owner |
+|---|---|---|
+| File | `ID_SESSION_CONNECT`, `ID_FILE_OPEN`, `ID_FILE_CLOSE`, `ID_FILE_SAVE`, `ID_FILE_SAVE_AS`, `ID_FILE_CREATESHORTCUT`, `ID_FILE_PRINT`, `ID_FILE_PRINT_SETUP`, `ID_APP_EXIT` | `CChatApp`, MFC document defaults, `CChatDoc`, `CChatView`/primary print view, `CMainFrame` |
+| Edit | `ID_EDIT_UNDO`, Cut, Copy, Paste, Delete, Select All, `ID_CLEAR_HISTORY` | `CChatDoc::GetFocusSayOrEdit`, update/edit handlers, `CRtfCtrl::OnCmdMsg`, active document history |
+| View | Toolbar Main/Member/Text; Tab Bar; Status Bar; Status Window; Comic/Text; Member List List/Icon; MOTD; Sounds Off; Logon Notifications; dynamic Macros/Define Macro; Automation; Options | `CChatApp`, `CMainFrame`, `CChatDoc`, `CStatusView`, `CChatToolBar` |
+| Format | Color, Bold, Italic, Underline, Fixed Pitch, Symbol | `CChatDoc` forwarding to `CSayWnd`, plus `CRtfCtrl` local popup/accelerator handlers |
+| Room | Enter, Leave, Create, Room List, Room Properties, Connect, Disconnect | `CChatApp` and `CChatDoc` forwarding to the existing protocol/dialog functions |
+| Member | User List, Invite, Away, Profile, Identity, dynamic Get Character, Whisper Box, Add to Notifications, Ignore, E-mail, File, Home Page, NetMeeting, Version, Lag Time, Local Time, plus dynamic Host submenu | `CChatApp`, `CChatDoc`, `CMemberList`, `CPageView`, existing `protsupp.*`/`ircproto.*` calls |
+| Favorites | Add and Open plus the source's dynamic `.ccr` range | `CChatDoc` and `CChatApp`; excluded by the conversation-file/Windows-shell boundary |
+| Window | Cascade, horizontal tile, vertical tile, auto tile, arrange icons | MFC MDI defaults and `CMainFrame::OnMDIWindowCmd`, `OnWindowTileAuto`, `OnUpdateWindowTileAuto`, `AutoArrangeWindows` |
+| Help | Help Topics, Microsoft-on-the-Web submenu, Online Support, Release Notes, About | `CChatApp::OnHelpTopics`, URL handlers, `OnHelpReleaseNotes`, and `OnAppAbout`; deferred items are separated below |
+
+#### Original file and function index for implementation
+
+| Area | Original evidence that must be followed | Planned Qt target |
+|---|---|---|
+| Resource extraction | `chat.rc`; `resource.h`; command strings, MENU, TOOLBAR, ACCELERATORS, icons, and BMP declarations | Keep `src/qt/originalassets.*` as a parser/asset-path adapter only. It must not supply guessed actions, captions, IDs, or state. |
+| Application commands | `chat.cpp`: `CChatApp` message map; `OnSessionConnect`, `OnUpdateSessionConnect`, `OnNewroom`, `OnUpdateNewroom`, `OnCreateroom`, `OnDisconnect`, `OnUpdateDisconnect`, `OnViewOptions`, `OnViewAutomations`, both update handlers, `OnChatroomList`, `OnUserList`, `OnUpdateCanSearch`, `OnAwayToggle`, `OnUpdateAwayToggle`, `OnViewTabbar`, `OnUpdateViewTabbar`, `OnMotd`, `OnUpdateMotd`, status/login-notification handlers, toolbar handlers, `OnDefineMacro`, `OnToolBarDropDown`, and `SetStatusPaneString` | `src/original/chat.*`; invoke these original-named functions from source-equivalent command routing rather than duplicating their conditions in an unrelated adapter. |
+| Main frame | `mainfrm.*`: `OnCreate`, `PreCreateWindow`, `OnClose`, `OnBarCheck`, status-bar handlers, `OnUpdateFilePrintPreview`, `OnMDIWindowCmd`, auto-tile handlers, `AutoArrangeWindows`, `OnSize`, `OnMenuSelect`, and `GetMessageString` | `src/original/mainfrm.*`: retain `createMenus`, `createAccelerators`, `createToolBars`, `createStatusBar`, `updateCommandUi`, and `executeCommand` only as Qt replacements for MFC frame mechanics. |
+| Document command owner | `chatdoc.*` message map and handlers for Edit, send mode, member actions, view mode, member-list mode, format, admin/roles, room properties, macro invocation/state, file/leave state, and history | `src/original/chatdoc.*`; expose original-named command/update functions where the Qt dispatcher needs them. Do not re-express their predicates as a separate invented policy. |
+| Dynamic menus | `CChatDoc::GetMenu`, `InsertAdminMenu`, `RemoveAdminMenu`, `UpdateAdminMenu`, `UpdateMacroMenu`, `UpdateComicCharacterMenu`; `memblst.cpp::AddMacroMenu` and `ShowMemberContext`; `chat.cpp::OnFavorite`/`AddFavoritesToMenu` for the excluded Favorites boundary | `src/original/chatdoc.*`, `memblst.*`, and `mainfrm.*`. Main and context copies of a command must share the same handler and state result. |
+| Child frame and activation | `childfrm.*`: every message-map and override function; `chatdoc.cpp::LoadDocData`, `ResetStatus`, `SetTitle`, `OnFileClose`, `RegisterNewContent`, `SetObscured`, `OnFrameWindowActivate`; `chatview.*` creation/cleanup and primary-view selection | `src/original/childfrm.*`, `chatdoc.*`, `chatview.*`, `mainfrm.*`, and `tabbar.*`; `QMdiSubWindow`/`QMdiArea` replace only MDI APIs. |
+| Toolbar/rebar | `chatbars.*`: `CCoolBarEx` create/add/save/load/show helpers and `CChatToolBar::Create`, `OnPrepareToolBar`, `ToggleBar`, `OnContextMenu`; `coolbar.*`: layout and `OnUpdateCmdUI` behavior | `src/original/chatbars.*` and `coolbar.*`; use the original BMPs directly and preserve packed band order, lengths, breaks, and visibility flags. |
+| Focus and edit routing | `chatdoc.cpp::GetFocusSayOrEdit`, `GetComponentWindow`, `CycleFocus`, `SetFocusToSayWnd`; `saywnd.*`; `rtfctrl.*`; `spltchat.*`; `tabbar.*`; `pageview.*`; `textview.*`; `memblst.*`; `bodycam.*`; `whisprbx.*` | The same files under `src/original`. Qt focus events and key events may replace HWND/message delivery, but the original target selection, ordering, consumption, and original function calls must remain visible. |
+| Context-command owners | `CPageView::OnContextMenu`; `CTextView::OnContextMenu`/`LoadContextMenu`; `CStatusView::LoadContextMenu`; `CMemberList::OnContextMenu`; `CBodyCam::OnContextMenu`; `CRtfCtrl::ShowFormattingPopUp`, `OnInitMenuPopup`, `OnMenuSelect`, `OnEnterIdle`; Whisper context and focus handlers | `src/original/pageview.*`, `textview.*`, `status.*`, `memblst.*`, `bodycam.*`, `rtfctrl.*`, and `whisprbx.*`. Every popup must be built from its named `chat.rc` resource. |
+| Fixed presentation | Original resource metrics and color uses in the files above; the user requirement fixes standard Windows 98 colors rather than host system colors | `src/qt/win98palette.*` only for fixed Qt palette/style adaptation. No host-palette lookup or non-source selected-tab/toolbar styling is permitted. |
+
+#### Source-backed gaps to resolve
+
+These are audit findings, not authorization to invent behavior:
+
+1. `CMainFrame::commandIsPorted` is a hand-maintained allowlist. It omits
+   source-backed commands whose handlers exist, including `ID_MOTD`,
+   `ID_ADMIN_BGRNDSYNC`, and the dynamically inserted `ID_MEMBER_GETCHAR`.
+   `ID_MOTD` has dispatch and state code but is disabled by the allowlist and
+   is marked checkable even though `OnUpdateMotd` never sets a check. The
+   replacement must classify every resource command explicitly and must not
+   silently disable or restyle a command merely because an allowlist was not
+   updated.
+2. `CChatDoc::UpdateAdminMenu` is an empty Qt stub although the original adds
+   `IDR_ADMIN` plus its separator to the end of Member only while self is an
+   operator. Operator transitions already call this function. The exact
+   insertion/removal path and shared command state are required.
+3. Frame Edit state and dispatch use any focused `QTextEdit`. The source uses
+   `GetFocusSayOrEdit`: Undo/Cut/Paste/Delete are limited to main or Whisper
+   Say input, while Copy/Select All also accept the read-only main Text view
+   and active Whisper transcript. Logical previous focus is retained while a
+   menu owns focus. Comic view, member list, and unrelated dialog edits do not
+   become accidental Edit targets.
+4. Every `IDR_MAINFRAME` accelerator is installed as an application-global
+   `QShortcut`. This can compete with `IDR_RTFACCEL`,
+   `IDR_WHISPERACCEL`, editable controls, and modeless Whisper handling.
+   Shortcut scope and precedence must be derived from the original control,
+   frame, and dialog paths, and one key press must invoke at most one command.
+5. Command state refresh is concentrated in menu `aboutToShow`, MDI changes,
+   and command completion. MFC `OnUpdateCmdUI` also reflects focus,
+   selection, clipboard, formatting, connection, member, role, mode, and bar
+   changes in toolbar and duplicate menu actions. Qt must refresh all copies
+   from the same source predicate at the corresponding state transitions.
+6. Several view-state defaults are derived from null Qt pointers instead of
+   original command routing. Examples requiring source tests include
+   Comic/Text and List/Icon checks with no active document, Status-view
+   Comic/Text disable/radio behavior, and Font/format availability in a
+   Status document.
+7. The Favorites toolbar dropdown locates top-level menu index 6 directly.
+   The source accounts for an MDI system menu when a child is maximized.
+   Resource identity and the original `GetMainSubMenu(6)` semantics must
+   survive child-frame menu changes without selecting the wrong popup.
+8. `CBodyCam` constructs its two popup actions manually. It must consume
+   `IDR_BODYCONTEXT` directly, retain keyboard-context placement, use the
+   source freeze check, and call only `OnBodycontextFreeze` or
+   `OnBodycontextSendexpression`.
+9. Child-frame Qt code lacks parts of `OnMDIActivate`, `UpdateMDITab`,
+   `OnUpdateFrameMenu`, obscured/new-content handling, first activation, and
+   create/destroy auto-arrangement. Status close must hide rather than destroy;
+   room close must use the source document/protocol path once. Geometry and
+   conversation-file persistence remain assigned to their separate TODO.
+10. Status help must preserve `CMainFrame::OnMenuSelect` macro normalization,
+    idle connection text, and popup forwarding from `CRtfCtrl` and `CBodyCam`.
+    A Qt tooltip or an invented status message is not a substitute.
+
+#### Deferred and separately gated command boundary
+
+| Commands/resources | Classification for this work block |
+|---|---|
+| `IDR_SRVR_INPLACE`, its 27 accelerators, `binddoc.*`, `bindipfw.*`, `ipframe.*`, `bindauto.cpp`, and `bindtarg.cpp` | COM/OLE/DocObject/Automation integration is deferred and non-gating. No Qt in-place-server menu is created. |
+| `ID_TURN_OFF_SOUNDS`, `ID_PLAY_SOUND`, `ID_WHISPER_SOUND`, `sounddlg.*`, `mcithrd.*` | MCI/Sound is deferred and non-gating. Resource actions remain identifiable but disabled; accelerators perform no substitute effect. |
+| `ID_START_NETMEETING` | NetMeeting is deferred and non-gating; no launch, package probe, or replacement call is added. |
+| `ID_SEND_FILE`, `filesend.*` | Source-defined DCC is priority 4. The action remains disabled until that package satisfies its own protocol and dialog gate. |
+| `ID_FILE_OPEN`, `ID_FILE_SAVE`, `ID_FILE_SAVE_AS`, `ID_FILE_CREATESHORTCUT`, `ID_FAVORITES_ADDTOFAVORITES`, `ID_FAVORITES_OPENFAVORITES`, and dynamic `ID_FAVORITES..ID_FAVORITES_LAST` | Conversation-file operations belong to the later conversation-file TODO; Windows Desktop/Favorites discovery and monitoring remain deferred shell integration. No generic file or bookmark format is introduced. |
+| `ID_HELP_TOPICS` | WinHelp is deferred and non-gating. |
+| `ID_HELP_RELEASENOTES` | The original opens a local installation file through the Windows shell. It remains disabled under the shell-integration deferral. |
+| `ID_FILE_PRINT_PREVIEW` and printer-specific branches | The source explicitly disables Print Preview in `CMainFrame::OnUpdateFilePrintPreview`. Generic Print/Print Setup routing stays in scope; printer-specific parity remains in its separate TODO. |
+| `ID_VIEW_MACROS` | Not a platform deferral: the original has an accelerator and string but no handler. Preserve that source-defined absence; do not alias it to `ID_DEFINE_MACRO` or Automation. |
+
+`ID_VIEW_AUTOMATIONS` is the source's Rules/Notifications property sheet and
+is not the deferred COM Automation surface. `ID_APP_ABOUT`,
+`ID_ADMIN_BGRNDSYNC`, `ID_MEMBER_GETCHAR`, `ID_WINDOW_ARRANGE`, and the seven
+fixed Microsoft Web commands (`ID_HELP_FREESTUFF`, `ID_HELP_PRODUCTNEWS`,
+`ID_HELP_FAQ`, `ID_HELP_ONLINESUPPORT`, `ID_HELP_BESTOFWEB`,
+`ID_HELP_SEARCHTHEWEB`, and `ID_HELP_MSHOMEPAGE`) are non-deferred commands
+for this block. Each Web handler must retain its original
+`LaunchMicrosoftURL(IDS_URL_*)` call and use only the already established
+shared URL-launch adapter; it must not rewrite, replace, or synthesize a URL.
+
+#### Ordered implementation stages
+
+1. **Build the command/resource oracle.** Extend source-derived tests to walk
+   every `IDR_MAINFRAME` menu node, all three toolbars, all active context
+   menus, and all three active accelerator tables. Record for each command ID:
+   resource locations, original message-map or MFC-base owner, execute
+   function, update function, check/radio style, shortcut scope, status/help
+   string, and active/deferred/no-handler classification. The oracle must fail
+   on a missing, duplicate, reordered, guessed, or unclassified command.
+2. **Restore source-equivalent command routing.** Make
+   `CMainFrame::executeCommand` replace MFC dispatch rather than own domain
+   behavior. Resolve the active control/view/document/child/frame/application
+   target in the source order and call the original-named handler. Remove
+   duplicated predicates when an original update/handler function can be
+   called. Base MFC commands receive a narrowly scoped Qt equivalent in the
+   original owner file; unresolved commands remain inert and documented.
+3. **Complete static and dynamic menus.** Preserve all nine main popups and
+   every submenu/separator exactly. Implement source-defined dynamic Macro,
+   Get Character, and operator Host insertion/removal in their original
+   positions. Reuse the same action/state path in Main, context, and toolbar
+   copies. Keep excluded Favorites dynamics and in-place-server resources out
+   of the active implementation.
+4. **Complete command UI predicates.** Translate every applicable
+   `ON_UPDATE_COMMAND_UI`, range update, radio/check, and MFC default state.
+   Cover connection states; active/no/status/room document; Comic/Text mode;
+   room modes; member selection count and self/comic/operator/speaker/
+   spectator state; macro definition/expansion; history; input selection,
+   undo and clipboard; formatting consistency; bar visibility; status window;
+   notification window; and auto-tile. All action copies must change together.
+5. **Complete accelerator and focus routing.** Apply the exact accelerator
+   tables with control-local, Whisper-local, and frame scopes. Preserve
+   `GetFocusSayOrEdit`, menu-time previous focus, the source Tab order
+   (Tab bar, Comic or Text output, Say input, member list, BodyCam with the
+   source view masks), one-shot character forwarding, Say Page Up/Page Down
+   forwarding, first-item member focus, dialog focus restoration, MDI
+   activation focus, Whisper Escape handling, and Whisper Alt-macro flags.
+6. **Complete toolbar and status behavior.** Preserve BMP cells, separators,
+   check/group/dropdown styles, visibility toggles, whole-coolbar behavior,
+   context menu, band state, and source status/tool-tip strings. Keep the two
+   status panes, fixed member width, active-document status restoration,
+   singular/plural member text, and menu-help forwarding. Use only fixed
+   Windows 98 colors and source resource metrics.
+7. **Complete runtime child-frame behavior.** Port activation/deactivation
+   document binding, active tab, title/status/menu refresh, status-child hide,
+   room-child close, first activation/maximize decision, tab insertion/
+   removal and new-content icons, obscured state, MDI Window commands, and
+   auto-arrangement callbacks. Do not absorb conversation serialization,
+   stored child geometry, or printer-specific work from their later TODOs.
+8. **Run the acceptance matrix.** Exercise every non-deferred command from
+   each surface where it occurs and every relevant state transition. Verify
+   excluded and no-handler commands stay inert without placeholder output.
+   Record each source-to-Qt result in this overview before checking the TODO.
+
+#### Test assignments
+
+- Extend `original_assets_test.cpp` for exact resource trees, toolbar cells,
+  context resources, accelerator counts/flags, and status/tool-tip strings.
+- Extend `original_ui_structure_test.cpp` for the nine-popup menu tree,
+  separators, action IDs, duplicate-action synchronization, status panes,
+  fixed Windows 98 palette, shortcut scope, and focus/edit command matrix.
+- Extend `original_coolbar_test.cpp` for direct BMP cells, button styles,
+  Favorites dropdown identity, whole/individual visibility, toolbar context,
+  and packed band state.
+- Extend `original_mdi_join_test.cpp` and `original_room_switch_test.cpp` for
+  child activation/deactivation, status-child hiding, tabs/titles/status,
+  MDI Window commands, obscured/new-content icons, and auto-arrangement.
+- Extend `original_member_commands_test.cpp` and
+  `original_pageview_interaction_test.cpp` for dynamic Host/Get Character/
+  Macro menus, every member/admin context copy, BodyCam context, and exact
+  selection/role command UI.
+- Extend `original_text_view_test.cpp`, `original_whisper_box_test.cpp`, and
+  the Say/RTF coverage in `original_ui_structure_test.cpp` for edit ownership,
+  local accelerator precedence, Tab cycles, Page Up/Page Down, previous-focus
+  retention, Shift+F10 popup paths, and one-shot character forwarding.
+- Extend `original_motd_away_test.cpp`, `original_room_user_list_test.cpp`,
+  `original_printing_test.cpp`, and `original_persistence_test.cpp` only for
+  the commands and runtime flags assigned to this block. Dialog internals,
+  printer-specific output, and child geometry remain outside this gate.
+- Keep all additions inside `original-ui-suite-test` or the established IRC
+  suite cases that own MDI/connection state. Do not create a standalone test
+  executable or change the fresh-process-per-CTest contract.
+
+#### Definition of implemented
+
+The TODO may be checked only when all of these conditions hold:
+
+1. Every command reachable from the active resources has an exact
+   source-backed owner and state rule, or an explicit deferred/no-handler
+   classification from this section; no static allowlist omission determines
+   behavior.
+2. Main menus, submenus, separators, mnemonics, dynamic insertions, context
+   menus, toolbar buttons, direct icons, and displayed shortcuts match
+   `chat.rc` in identity and order.
+3. Every non-deferred command calls the same original-named function and has
+   the same visible side effect and enable/check/radio state for all tested
+   document, connection, selection, role, mode, focus, and clipboard states.
+4. Accelerators invoke exactly once in the source-defined scope. Local RTF
+   and Whisper tables do not conflict with frame shortcuts, and unsupported
+   shortcuts produce no invented behavior.
+5. MDI activation, status hiding, room closing, tabs, title/status transfer,
+   new-content indication, window commands, and focus restoration follow the
+   original child-frame/document call sequence within this block's boundary.
+6. Toolbar and status presentation uses direct original assets, source
+   strings/metrics, and fixed Windows 98 colors rather than host colors.
+7. Deferred commands remain visible where `chat.rc` places them, disabled and
+   side-effect free; no dummy dialog, message, file, URL, sound, transfer,
+   favorite, or platform replacement is introduced.
+8. The focused UI/IRC suite cases, the complete CTest set, Debug and Release
+   builds, isolated offscreen startup, `git diff --check`, and the
+   dummy-content/path scan pass, with results recorded in this overview.
 
 ### Completed work block: Text/Whisper URL and CTCP URL edge parity
 
@@ -1337,6 +1664,7 @@ and IdentD are explicitly deferred and do not weaken this acceptance claim.
 
 | Area | Source and runtime evidence | Implemented and verified result |
 | --- | --- | --- |
+| Starring document/view lifecycle | Original `CChatDoc::OnNewDocument` runs `InitMyDocument` before view creation, and initial `CChatView::CreateComicView(FALSE)` does not reset pages. Runtime inspection of the failed Qt MDI path found two title pages: `353`/`366` correctly populated the first through `ProcessEndEnumeration`, `UpdateTitle`, `AddStars`, and `AddStarsAux`, but `CPageView::paintEvent` subsequently drew the empty second page over it. Message panels appeared because they were added to that covering page. | `CMainFrame::AddDocument` establishes the document context and initializes it before constructing `CChildFrame`; `SetChatDoc` loads that context before initialization; initial `CreateComicView(false)` preserves the one title page, while explicit Text-to-Comic reconstruction retains reset/history replay. `original-mdi-join` proves the same page and panel remain at two elements through `353`, become six elements for two real users only after `366`, and change the visible render without a click or message. Focused regressions, both builds, and both 45/45 CTest sets pass. No parser, Starring construction, paint order, panel geometry, or asset path changed. |
 | Member/Say icons and delayed initial paint | Runtime inspection of the Qt client found text-only members in comic icon mode, blank source-positioned Say buttons, and a stale first frame after the real NAMES enumeration. Source inspection gives three independent causes. First, original `AddToMembersList` calls `AddToImageList`; `CMemberList::OnGetdispinfo` then selects the original avatar's cached 40-pixel image and the ignored/away/operator/spectator/normal status image from `IDB_MEMBER`, while the Qt path inserted text only. Second, original `IDB_SAY_BAR` is `res/balloons.bmp` with `RGB(192,192,192)` as its mask color, but the Qt mask sense was reversed. Third, MFC passes the owning `CChatDoc` through `CCreateContext` when creating `CPageView`; the Qt constructor sampled `GetChatDoc()` before MDI activation and retained null or the wrong document. `paintEvent` therefore produced white cells, while a pointer hit-test lazily sampled the later active document and accidentally made the pending title/panels visible. Screenshot content is not used as a behavior specification; all expected images and state order come from these source paths. | `protsupp.cpp::AddToImageList` obtains `GetIconPose()->GetDrawing()` from the directly loaded AVB image, caches it under the original avatar's `m_iconIndex`, and stores only a transient `QIcon`; no converted file is created. `CMemberList` maps the original 40-pixel avatar image list and direct `IDB_MEMBER` five-image strip to Qt's icon/list modes, including the original status-priority order, and `ChangeAvatarEntry` uses source-named `UpdateMemberListIcon`. `CSayWnd::createSayBar` reads `IDB_SAY_BAR` in place and applies `MaskInColor` to source gray. `CChatView::CreateComicView` passes its document explicitly to `CPageView`, mechanically replacing MFC's create context; `353` and `366` ordering is unchanged. `original-irc-state` compares every displayed avatar-region pixel with its decoded original icon pose, `original-ui-structure` checks every Say glyph mask pixel against the direct BMP, and `original-mdi-join` renders a non-white source-built initial page in the first event cycle after `366`, without a click or later message. The application target and all tests build, 44/44 CTests pass, isolated offscreen startup remains alive through its intentional timeout, and `git diff --check` is clean. No runtime server, room, nickname, or message value is retained. |
 | Initial room send | An authorized IRC reproduction reached `CSayWnd::bLegalToSend` with `CX_NOCHANNEL`. The server-confirmed self `JOIN` then ran `CIUserJoin` and changed the same room to `CX_INCHANNEL`; a subsequent send passed. The original `saywnd.cpp` rejects `CX_NOCHANNEL`, so an earlier invented state change would be incorrect. | The gate remains source-identical. `original-comic-send` verifies the exact `IDS_ILLEGAL_TO_SEND` rejection and unchanged input at `CX_NOCHANNEL`, followed by a successful send and cleared input at `CX_INCHANNEL`. `original-join-starring`, `original-irc-state`, and `original-mdi-join` retain the server-callback transition and initial query coverage. |
 | Say-input crash | The debugger stack repeated `CSplitSay::keyPressEvent` and its Qt `ForwardToSayWnd` adapter until stack exhaustion surfaced inside accelerator resource parsing. Original `CSplitChat::OnChar`, `CSplitChatV::OnChar`, and `CSplitSay::OnChar` synchronously send a newly constructed `WM_CHAR` to `CSayCtrl`; they do not resend the propagating parent event. `CTabBarTabCtrl::OnChar` uses the separate original `ForwardToSayWnd(UINT)` path. | `spltchat.cpp` constructs one fresh synchronous Qt key event for `CSayCtrl`, consumes the source event, and restores focus in the original order. `tabbar.cpp` uses `ForwardToSayWnd(UINT)` and source-defined Tab focus cycling. `original-ui-structure` starts with an ignored parent event and verifies exactly one insertion through each path without recursion. |

@@ -127,15 +127,20 @@ void CChatView::CreateComicView(bool doUpdate)
     m_doc->m_sayWnd = say;
     m_doc->m_memberList = members;
     m_doc->m_bodyCam = bodyCam;
-    page->ResetExistingPanels(true);
     if (m_doc->m_bLastMemberView) m_doc->OnViewIcon();
     else m_doc->OnViewListAux();
     if (doUpdate) {
+        // CChatDoc::OnViewComics rebuilds the page model only when changing
+        // back from Text view.  Initial view creation preserves the title page
+        // made by CChatDoc::InitMyDocument before the view exists.
+        page->ResetExistingPanels(true);
         m_doc->ExecuteHistory(HM_RELOAD);
         for (CUserInfo* pui : m_doc->m_allChannelPuis) {
             if (pui && !pui->IsDeparted()) members->AddUser(pui);
         }
         if (g_puiSelf) g_puiSelf->ClearTalkTos();
+    } else {
+        page->RefreshPanelN(0);
     }
 }
 
