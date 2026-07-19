@@ -5,6 +5,7 @@
 #include "chat.h"
 #include "chatdoc.h"
 #include "ircproto.h"
+#include "mainfrm.h"
 #include "memblst.h"
 #include "pageview.h"
 #include "protsupp.h"
@@ -309,7 +310,7 @@ void CSayWnd::showOriginalMessage(const QString& identifier)
         originalResourceString(identifier));
 }
 
-bool CSayWnd::bLegalToSend(bool privateMessage)
+BOOL bLegalToSend(BOOL privateMessage)
 {
     CRoomInfo* room = currentRoom;
     if (!room) {
@@ -320,13 +321,22 @@ bool CSayWnd::bLegalToSend(bool privateMessage)
     const int status = room->GetConnectionStatus();
     if ((status == CX_NOCHANNEL && !privateMessage) || status == CX_CONNECTING) {
         if (room->m_doc && room->m_doc->m_bStatusView)
-            showOriginalMessage(QStringLiteral("IDS_ILLEGAL_NOSLASH"));
+            QMessageBox::information(
+                theApp.m_pMainWnd,
+                originalResourceString(QStringLiteral("ID_MESSAGE_BOX_TITLE")),
+                originalResourceString(QStringLiteral("IDS_ILLEGAL_NOSLASH")));
         else
-            showOriginalMessage(QStringLiteral("IDS_ILLEGAL_TO_SEND"));
+            QMessageBox::information(
+                theApp.m_pMainWnd,
+                originalResourceString(QStringLiteral("ID_MESSAGE_BOX_TITLE")),
+                originalResourceString(QStringLiteral("IDS_ILLEGAL_TO_SEND")));
         return false;
     }
     if (privateMessage && (status == CX_DISCONNECTED || status == CX_CONNECTING)) {
-        showOriginalMessage(QStringLiteral("IDS_MUSTBE_CONNECTED"));
+        QMessageBox::information(
+            theApp.m_pMainWnd,
+            originalResourceString(QStringLiteral("ID_MESSAGE_BOX_TITLE")),
+            originalResourceString(QStringLiteral("IDS_MUSTBE_CONNECTED")));
         return false;
     }
     return true;

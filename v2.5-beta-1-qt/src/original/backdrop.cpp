@@ -50,18 +50,23 @@ BDFileRec* recordAt(UINT id)
 QString localBackdropFile(const QString& name)
 {
     if (name.isEmpty() || QFileInfo(name).fileName() != name) return {};
-    return originalComicArtPath(name);
+    return originalFileInDirectoryPath(theApp.GetBackDropDir(), name);
 }
 
 } // namespace
 
 QStringList OriginalBackdropNames()
 {
-    QDir directory(QDir(originalAssetRoot()).filePath(QStringLiteral("comicart")));
+    QDir directory(theApp.GetBackDropDir());
     QStringList result;
     // Original order: enumerate every BMP, then every BGB, without sorting.
-    for (const QString& pattern : {QStringLiteral("*.bmp"), QStringLiteral("*.bgb")}) {
-        result.append(directory.entryList({pattern}, QDir::Files, QDir::NoSort));
+    const QFileInfoList files = directory.entryInfoList(QDir::Files,
+                                                        QDir::NoSort);
+    for (const QString& suffix : {QStringLiteral("bmp"), QStringLiteral("bgb")}) {
+        for (const QFileInfo& file : files) {
+            if (file.suffix().compare(suffix, Qt::CaseInsensitive) == 0)
+                result.append(file.fileName());
+        }
     }
     return result;
 }

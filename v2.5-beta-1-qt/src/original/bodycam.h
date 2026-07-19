@@ -33,6 +33,7 @@ public:
     RECT DrawBody(QPainter* painter, CBody* body);
     void RefreshBody();
 
+    BOOL m_forcedDelete = TRUE;
     CAvatarX* m_avatar = nullptr;
 
 protected:
@@ -48,6 +49,8 @@ protected:
 
 private:
     const QString* StringFromEmotion(const CEmotion& emotion) const;
+    void OnBodycontextFreeze();
+    void OnBodycontextSendexpression();
 
     BOOL m_mouseDown = FALSE;
     BOOL m_bullDisabled = TRUE;
@@ -67,7 +70,10 @@ private:
 };
 
 CBodyCam* GetBodyCam();
+CBodyCam* GetCharSelBodyCam();
+void SetCharSelBodyCam(CBodyCam* bodyCam);
 void LoadEmotionStrings();
 void UpdateEmotion(CEmotion& emotion);
 void RefreshBodyCam(CAvatarX* avatar = nullptr);
 void DetachBodyCamAvatar();
+BOOL RefreshBodyPreview(CAvatarX* avatar);

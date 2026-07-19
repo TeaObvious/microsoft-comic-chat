@@ -8,6 +8,7 @@
 #include "chat.h"
 #include "chatdoc.h"
 #include "defines.h"
+#include "histent.h"
 #include "ircproto.h"
 #include "originalassets.h"
 #include "pageview.h"
@@ -213,6 +214,7 @@ CCharacterPage::CCharacterPage(QWidget* parent)
     }
 
     m_bodyCam->EnableDoubleClick(FALSE);
+    m_bodyCam->m_forcedDelete = FALSE;
     m_bodyCam->setMinimumSize(141, 270);
     m_copyright->setReadOnly(true);
     m_copyright->setMaximumHeight(48);
@@ -221,15 +223,19 @@ CCharacterPage::CCharacterPage(QWidget* parent)
     if (GetChatDoc() && GetChatDoc()->m_bComicView && MyAvatar()) {
         selected = QString::fromUtf8(MyAvatar()->OriginalName());
     }
+    CAvatarX* avatar = GetAvatar2(selected);
+    if (!avatar) avatar = GetAvatar3(QStringLiteral("X"));
+    if (avatar) {
+        selected = QString::fromUtf8(avatar->OriginalName());
+        m_selectedName = selected;
+        m_bodyCam->m_avatar = avatar;
+    }
     for (int index = 0; index < m_avatarList->count(); ++index) {
         QListWidgetItem* item = m_avatarList->item(index);
         if (item->data(Qt::UserRole).toString().compare(selected, Qt::CaseInsensitive) == 0) {
             m_avatarList->setCurrentItem(item);
             break;
         }
-    }
-    if (!m_avatarList->currentItem() && m_avatarList->count() > 0) {
-        m_avatarList->setCurrentRow(0);
     }
 
     auto* grid = new QGridLayout(this);
@@ -245,7 +251,25 @@ CCharacterPage::CCharacterPage(QWidget* parent)
 
     connect(m_avatarList, &QListWidget::currentItemChanged, this,
             [this](QListWidgetItem*, QListWidgetItem*) { selectAvatar(); });
-    selectAvatar();
+    m_bodyCam->RefreshBody();
+    updateCopyright(avatar);
+}
+
+CCharacterPage::~CCharacterPage()
+{
+    if (GetCharSelBodyCam() == m_bodyCam) SetCharSelBodyCam(nullptr);
+}
+
+void CCharacterPage::showEvent(QShowEvent* event)
+{
+    QWidget::showEvent(event);
+    SetCharSelBodyCam(m_bodyCam);
+}
+
+void CCharacterPage::hideEvent(QHideEvent* event)
+{
+    if (GetCharSelBodyCam() == m_bodyCam) SetCharSelBodyCam(nullptr);
+    QWidget::hideEvent(event);
 }
 
 void CCharacterPage::selectAvatar()
@@ -261,6 +285,25 @@ void CCharacterPage::selectAvatar()
     const QString name = item->data(Qt::UserRole).toString();
     CAvatarX* avatar = GetAvatar2(name);
     if (!avatar) {
+        QString message = originalResourceString(QStringLiteral("IDS_INVALIDART"));
+        message.replace(QStringLiteral("%1"), item->text());
+        QMessageBox::warning(
+            this,
+            originalResourceString(QStringLiteral("ID_MESSAGE_BOX_TITLE")),
+            message);
+        if (m_bodyCam->m_avatar) {
+            const QString previous = QString::fromUtf8(
+                m_bodyCam->m_avatar->OriginalName());
+            const QSignalBlocker blocker(m_avatarList);
+            for (int index = 0; index < m_avatarList->count(); ++index) {
+                QListWidgetItem* candidate = m_avatarList->item(index);
+                if (candidate->data(Qt::UserRole).toString().compare(
+                        previous, Qt::CaseInsensitive) == 0) {
+                    m_avatarList->setCurrentItem(candidate);
+                    break;
+                }
+            }
+        }
         return;
     }
     m_selectedName = QString::fromUtf8(avatar->OriginalName());
@@ -285,7 +328,16 @@ void CCharacterPage::apply()
         SetMyCharacter(m_selectedName);
         return;
     }
-    SetMyAvatar(m_selectedName, document->GetConnectionStatus() == CX_INCHANNEL);
+    CAvatarX* modelAvatar = m_bodyCam->m_avatar;
+    if (!modelAvatar || MyAvatarID() == modelAvatar->m_avatarID) return;
+    if (g_puiSelf) {
+        AddAndExecute(new ChangeAvatarEntry(
+            g_puiSelf, modelAvatar->m_name,
+            QString::fromUtf8(modelAvatar->Url() ? modelAvatar->Url() : "")),
+            document);
+    } else {
+        SetMyAvatar(modelAvatar->m_name);
+    }
 }
 
 CBackgroundPage::CBackgroundPage(QWidget* parent)

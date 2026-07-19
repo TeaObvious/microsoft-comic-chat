@@ -68,6 +68,15 @@ struct OriginalDialogResource {
 QString originalAssetRoot();
 QString originalArtifactsRoot();
 QString originalV1SharedRoot();
+// Resolves a relative directory beneath the authoritative original root.
+// Existing path components are matched case-insensitively to preserve the
+// original Win32 ArtDir spelling on case-sensitive hosts.
+QString originalAssetDirectoryPath(const QString& relativePath);
+// Resolves one unchanged source file inside an already selected original-art
+// directory. The filename comparison follows the case-insensitive Win32
+// filesystem behavior used by the original loaders.
+QString originalFileInDirectoryPath(const QString& directoryPath,
+                                    const QString& fileName);
 QString originalAssetPath(const QString& relativePath);
 QString originalArtifactPath(const QString& relativePath);
 QString originalV1SharedPath(const QString& fileName);

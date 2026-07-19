@@ -39,6 +39,91 @@ QString originalV1SharedRoot()
     return root;
 }
 
+QString originalAssetDirectoryPath(const QString& relativePath)
+{
+    const QString root = originalAssetRoot();
+    if (root.isEmpty() || relativePath.isEmpty()
+        || QDir::isAbsolutePath(relativePath)) {
+        return {};
+    }
+
+    const QString clean = QDir::cleanPath(relativePath);
+    if (clean == QLatin1String("..")
+        || clean.startsWith(QLatin1String("../"))
+        || clean == QLatin1String(".")) {
+        return {};
+    }
+
+    QString resolved = root;
+    const QStringList components = clean.split(QLatin1Char('/'),
+                                                Qt::SkipEmptyParts);
+    for (const QString& component : components) {
+        QDir directory(resolved);
+        QString matched = component;
+        const QFileInfo exact(directory.filePath(component));
+        if (!exact.exists() || !exact.isDir()) {
+            matched.clear();
+            const QFileInfoList entries = directory.entryInfoList(
+                QDir::Dirs | QDir::NoDotAndDotDot, QDir::NoSort);
+            for (const QFileInfo& entry : entries) {
+                if (entry.fileName().compare(component,
+                                             Qt::CaseInsensitive) == 0) {
+                    matched = entry.fileName();
+                    break;
+                }
+            }
+        }
+        resolved = directory.filePath(matched.isEmpty() ? component : matched);
+    }
+
+    const QString normalized = QDir::cleanPath(resolved);
+    const QString rootPrefix = root + QDir::separator();
+    if (!normalized.startsWith(rootPrefix)) return {};
+
+    const QFileInfo info(normalized);
+    if (!info.exists() || !info.isDir()) return normalized;
+    const QString canonical = info.canonicalFilePath();
+    return canonical.startsWith(rootPrefix) ? canonical : QString();
+}
+
+QString originalFileInDirectoryPath(const QString& directoryPath,
+                                    const QString& fileName)
+{
+    if (directoryPath.isEmpty() || fileName.isEmpty()
+        || QDir::isAbsolutePath(fileName)
+        || QFileInfo(fileName).fileName() != fileName) {
+        return {};
+    }
+
+    const QFileInfo directoryInfo(directoryPath);
+    if (!directoryInfo.exists() || !directoryInfo.isDir()) return {};
+    const QString directory = directoryInfo.canonicalFilePath();
+    const QString root = originalAssetRoot();
+    if (root.isEmpty()
+        || (directory != root
+            && !directory.startsWith(root + QDir::separator()))) {
+        return {};
+    }
+
+    QFileInfo match(QDir(directory).filePath(fileName));
+    if (!match.exists() || !match.isFile()) {
+        const QFileInfoList files = QDir(directory).entryInfoList(
+            QDir::Files, QDir::NoSort);
+        for (const QFileInfo& candidate : files) {
+            if (candidate.fileName().compare(fileName,
+                                             Qt::CaseInsensitive) == 0) {
+                match = candidate;
+                break;
+            }
+        }
+    }
+    if (!match.exists() || !match.isFile()) return {};
+
+    const QString canonical = match.canonicalFilePath();
+    return canonical.startsWith(directory + QDir::separator())
+        ? canonical : QString();
+}
+
 QString originalAssetPath(const QString& relativePath)
 {
     const QString root = originalAssetRoot();

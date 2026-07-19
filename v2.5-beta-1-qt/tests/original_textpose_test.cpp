@@ -72,6 +72,7 @@ int main(int argc, char** argv)
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
+    theApp.InitVals();
 
     const QString shout = ruleArgument(QStringLiteral("ID_RULE_SHOUT"), 1);
     const QString laugh = ruleArgument(QStringLiteral("ID_RULE_LAUGH"), 0);

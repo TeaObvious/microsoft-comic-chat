@@ -65,6 +65,7 @@ public:
     bool m_bDoTest = false;
     bool m_bAutoDownloadAvatars = false;
     bool m_bAutoDownloadBackdrops = true;
+    bool m_bFoundArt = false;
     bool m_bAllowFileTX = true;
     bool m_bNoMIDI = false;
     bool m_bAcceptNMCalls = true;
@@ -118,6 +119,10 @@ public:
     QString m_strFavoritesDir;
     QString m_strChatRooms;
     QString m_strFileTXDir;
+    QString m_strBaseDir;
+    QString m_strAvatarDir;
+    QString m_strBackDropDir;
+    QString m_strDefaultArtDir;
     QString m_soundPath;
     CMacro m_macros[NMACROS];
     QSet<QString> m_ignores;
@@ -174,6 +179,10 @@ public:
     int AddRoomInfo(CRoomInfo* enterInfo);
     void RemoveRoomInfo(int index);
     void CleanRoomInfos();
+
+    const QString& GetBaseDir() const { return m_strBaseDir; }
+    const QString& GetAvatarDir() const { return m_strAvatarDir; }
+    const QString& GetBackDropDir() const { return m_strBackDropDir; }
 
 private:
     QTimer* m_connectTimer = nullptr;

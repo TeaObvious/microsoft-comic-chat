@@ -3,6 +3,7 @@
 #include "avatario.h"
 
 #include "avatar.h"
+#include "chat.h"
 #include "protsupp.h"
 #include "originalassets.h"
 
@@ -14,10 +15,9 @@ CAvatarX* LoadAvatarInfo(const QString& avatarName)
     if (avatarName.isEmpty() || QFileInfo(avatarName).fileName() != avatarName) {
         return nullptr;
     }
-    const QString path = originalComicArtPath(avatarName + QStringLiteral(".avb"));
-    if (path.isEmpty()) {
-        return nullptr;
-    }
+    const QString path = originalFileInDirectoryPath(
+        theApp.GetAvatarDir(), avatarName + QStringLiteral(".avb"));
+    if (path.isEmpty()) return nullptr;
 
     auto* stream = new CAvatarFileStream(path);
     CAvatarX* avatar = CAvatarX::LoadAvatar(stream);
@@ -32,13 +32,16 @@ CAvatarX* LoadAvatarInfo(const QString& avatarName)
 
 QStringList OriginalAvatarNames()
 {
-    QDir directory(QDir(originalAssetRoot()).filePath(QStringLiteral("comicart")));
-    const QStringList files = directory.entryList({QStringLiteral("*.avb")}, QDir::Files,
-                                                   QDir::NoSort);
+    QDir directory(theApp.GetAvatarDir());
     QStringList names;
+    const QFileInfoList files = directory.entryInfoList(QDir::Files,
+                                                        QDir::NoSort);
     names.reserve(files.size());
-    for (const QString& file : files) {
-        names.append(QFileInfo(file).completeBaseName());
+    for (const QFileInfo& file : files) {
+        if (file.suffix().compare(QStringLiteral("avb"),
+                                  Qt::CaseInsensitive) == 0) {
+            names.append(file.completeBaseName());
+        }
     }
     return names;
 }

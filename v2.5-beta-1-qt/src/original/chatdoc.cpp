@@ -267,6 +267,8 @@ void CChatDoc::InitMyDocument()
 {
     if (m_bDocumentInitialized) return;
     m_bDocumentInitialized = true;
+    const QByteArray defaultArtDirectory = theApp.m_strDefaultArtDir.toLocal8Bit();
+    SetArtDir(defaultArtDirectory.constData());
     if (!m_bComicView) return;
     AddNewPage();
     if (!m_pages.isEmpty()) {

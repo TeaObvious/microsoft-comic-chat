@@ -465,6 +465,10 @@ void CAvatarX::UpdateBody(CBody* newBody)
     }
     delete m_body;
     m_body = newBody;
+
+    if (!RefreshBodyPreview(this) && m_avatarID == MyAvatarID()) {
+        RefreshBodyCam();
+    }
 }
 
 void CAvatarComplex::DifferentTorso(int torsoIndex)
@@ -880,22 +884,19 @@ CAvatarX* GetAvatar2(const QString& name)
 
 QStringList GetAllAvatarNames()
 {
-    if (avatarNames.isEmpty()) {
-        avatarNames = OriginalAvatarNames();
-    }
+    avatarNames = OriginalAvatarNames();
     return avatarNames;
 }
 
 void ResetAvatarNames()
 {
     nextAvatarName = -1;
-    avatarNames.clear();
 }
 
 void GetNextAvatarName(QString& avatarName)
 {
     if (nextAvatarName == -1) {
-        avatarNames = OriginalAvatarNames();
+        GetAllAvatarNames();
     }
     const int upperBound = avatarNames.size() - 1;
     if (upperBound == -1) {
@@ -944,12 +945,10 @@ CAvatarX* GetAvatar3(const QString& name, void* userInfo, BOOL randomIfNotFound)
         return nullptr;
     }
 
-    const QStringList names = GetAllAvatarNames();
-    if (names.isEmpty()) {
-        return nullptr;
-    }
-    nextAvatarName = (nextAvatarName + 1) % names.size();
-    CAvatarX* replacement = GetAvatar3(names[nextAvatarName], userInfo, FALSE);
+    QString replacementName;
+    GetNextAvatarName(replacementName);
+    if (replacementName == QLatin1String("_NoArt")) return nullptr;
+    CAvatarX* replacement = GetAvatar3(replacementName, userInfo);
     if (replacement) {
         replacement->m_flags |= OTHERMAPPED;
     }

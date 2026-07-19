@@ -62,14 +62,14 @@ synchronized with the active work package and its verified handoff state:
 > integration are deferred and non-gating. Do not implement Qt substitutes for
 > those deferred facilities unless the user explicitly changes this scope.
 >
-> Next work package: resume fixed priority 2 with the remaining non-deferred
-> Avatar/emotion/BodyCam boundary in phase 3. Re-audit `bodycam.*`, `avatar.*`,
-> `avatario.*`, `textpose.cpp`, their `proppage.*` callers, message maps, and
-> `chat.rc` resources before writing its work block. Close only the
-> source-defined character double-click, focus/tab cycle, property-page/error
-> coupling, and ArtDir/art-pack switching gaps. WinInet avatar/RealInfo
-> download mechanics remain deferred and must not receive a replacement
-> downloader, substitute character, or locally invented success path.
+> Next work package: continue fixed priority 2 by re-auditing the remaining
+> source-defined Comic Chat CTCP, comment, and URL edges in `protsupp.*`,
+> `format.*`, `urlutil.*`, `rtfctrl.*`, and `pageview.*`. Establish an exact
+> source contract and test boundary before changing code; do not fill an
+> unrepresented branch from generic IRC or browser behavior. DCC remains the
+> separate priority-4 `filesend.*` package, while Sound, NetMeeting, and
+> platform shell integration remain deferred and must not receive substitute
+> effects.
 > `IdentD` is explicitly deferred and non-gating; do not bind port 113 or count
 > it as required for core-port completion. After each accepted slice, update
 > this next-work-package paragraph and every affected status entry before
@@ -140,6 +140,13 @@ synchronized with the active work package and its verified handoff state:
 - [x] Complete member-list icon/list modes, original status images,
   context-command enablement, selection behavior, and all source-backed
   member actions.
+- [x] Complete the remaining non-deferred Avatar/emotion/BodyCam boundary.
+  This is implemented only when the source-defined BodyCam character-page
+  double-click, character forwarding and Tab cycle, embedded-preview
+  restrictions, avatar-preview refresh, Character-page selection/error/apply
+  flow, and `SetArtDir` switching between directly stored original art packs
+  all follow their original functions. WinInet download/RealInfo mechanics
+  remain deferred and no replacement download or substitute art is allowed.
 - [ ] Complete all menu, submenu, accelerator, toolbar, status-bar,
   child-frame, focus, and command-UI behavior defined by `chat.rc` and the
   original message maps.
@@ -147,7 +154,7 @@ synchronized with the active work package and its verified handoff state:
   Comic Fonts, room and user lists, and
   their exact validation and apply/cancel effects.
 - [ ] Complete conversation-file integration, child-frame persistence,
-  URL edge cases, printer-specific paths, and art-pack switching.
+  URL edge cases, and printer-specific paths.
 - [ ] Priority 4: restore the source-defined DCC file-transfer path from
   `filesend.*`, CTCP `DCC SEND`, `IDD_FILE_TRANSFER`, and their original
   protocol glue. Completion requires exact quoting, address/port fields,
@@ -166,6 +173,115 @@ synchronized with the active work package and its verified handoff state:
   files, CTest still reports all 45 names independently, and each invocation
   starts a fresh process so Qt application and global Comic Chat state cannot
   leak between cases.
+
+### Completed work block: Avatar/emotion/BodyCam and ArtDir parity
+
+Source contract:
+
+1. `bodycam.cpp::CBodyCam::OnLButtonDblClk` opens
+   `CChatApp::DoOptionsDialog(TRUE, IDD_CHARACTERPAGE)` only when double-click
+   is enabled, the active room is not `CX_CONNECTING`, and the click is above
+   the emotion wheel or the wheel is disabled. The Character-page preview
+   calls `EnableDoubleClick(FALSE)`, so it cannot recursively open another
+   Options sheet.
+2. `CBodyCam::OnChar` forwards every character except Tab through the existing
+   `ForwardToSayWnd` boundary. Tab invokes
+   `CycleFocus(CHATFOCUS_EMOTIONWND, shift)` only for the main BodyCam when its
+   focus was not gained implicitly by a mouse operation. `OnKeyDown` retains
+   the exact arrow/Home snap tables, Ctrl pixel movement, Shift edge movement,
+   and the mouse-down/disabled-wheel guard; the Qt event boundary must not let
+   that guard swallow ordinary character or Tab handling.
+3. `m_forcedDelete` distinguishes the main BodyCam from the embedded
+   Character-page preview. Only the main BodyCam exposes `IDR_BODYCONTEXT`.
+   Freeze toggles only `AF_FROZEN`/`AF_UNFROZEN`; Send Expression first passes
+   the same global `bLegalToSend` gate as the source and sends exactly `<Chr>`
+   with `BM_SAY` only when legal.
+4. `avatar.cpp::CAvatarX::UpdateBody` replaces a genuinely different body,
+   then calls `RefreshBodyPreview(this)`. If that exact avatar is not the
+   active Character-page preview and its ID is `MyAvatarID()`, it calls
+   `RefreshBodyCam()`. Qt may replace the `CUI` raw preview pointer with a
+   guarded widget pointer, but the source function names and precedence stay
+   unchanged.
+5. `proppage.cpp::CCharacterPage` enumerates only `*.avb` in the active avatar
+   directory, uses the source `GetAvatar2(m_strSel)` then `GetAvatar3("X")`
+   fallback, disables preview double-click/context behavior, and displays the
+   decoded source copyright. A failed selected AVB loads
+   `IDS_INVALIDART`, substitutes `%1`, and restores the list selection to the
+   preview avatar. Accept outside a comic document stores `SetMyCharacter`;
+   in comic mode it changes only a different avatar, using
+   `ChangeAvatarEntry` when `g_puiSelf` exists and `SetMyAvatar` otherwise.
+   Cancel changes no application or room avatar state.
+6. `protsupp.cpp::SetArtDir` forms one shared backdrop/avatar directory from
+   the configured original root plus the supplied relative ArtDir, returns
+   early when unchanged, updates `m_bFoundArt` through `ArtDirsOK`, and calls
+   `ResetAvatarNames`. `ArtDirsOK` requires at least one `.bmp` or `.bgb` and
+   at least one `.avb`. `avatario.cpp`, `avatar.cpp`, `backdrop.cpp`, and both
+   art property pages enumerate and load from that active directory. Each
+   document resets to `m_strDefaultArtDir` in `InitMyDocument`, matching the
+   source before a locator may override it.
+7. The Qt path adapter may resolve the source spelling `ComicArt` to the
+   tracked `comicart` directory on a case-sensitive host. It must remain under
+   the configured authoritative source root, open AVB/BGB/BMP files in place,
+   and create no converted, copied, downloaded, generated, or fallback asset.
+   The fixed direct-ledger helpers for `comicart`, `artpack1`, and
+   `artpack1/archive` remain available for inventory tests and do not select
+   runtime art.
+
+Implemented when:
+
+- Offscreen interaction tests prove main-BodyCam character forwarding exactly
+  once, forward/backward source focus traversal, positive and connecting-room
+  double-click branches, and absence of a preview context menu. Direct source
+  comparison plus the resource-menu regression establishes the unchanged
+  freeze and legal send-expression command boundary.
+- Direct source comparison establishes that `UpdateBody` refreshes the exact
+  active preview before the main BodyCam. Avatar/UI tests prove guarded preview
+  identity, Character-page fallback/error/apply effects using only real
+  enumerated AVBs and source resources, and that selection alone writes no
+  application state; rejecting the property sheet invokes no apply path.
+- Direct-format tests switch between `ComicArt` and `artpack1`, verify their
+  distinct source AVB/BGB enumerations and successful direct loads, verify a
+  source directory without both art types fails `ArtDirsOK`, and verify a new
+  document restores the default ArtDir.
+- Debug and Release builds, all 45 consolidated CTests, isolated offscreen
+  startup, `git diff --check`, the documentation path scan, and the added-line
+  dummy-content scan pass before this block and its TODO are marked complete.
+
+Verified result:
+
+- `CBodyCam` retains the source mouse/emotion implementation and adds the
+  missing `OnChar`, `OnGetDlgCode`, character-page double-click,
+  `m_forcedDelete`, resource-context, freeze, and legal `<Chr>` send branches
+  at the original module boundary. The Qt event adapter intercepts Tab only
+  for the main BodyCam because QWidget consumes focus traversal before
+  `keyPressEvent`; the embedded Character preview retains dialog traversal.
+- `CAvatarX::UpdateBody`, `RefreshBodyPreview`, `RefreshBodyCam`,
+  `CCharacterPage`, `SetArtDir`, `ArtDirsOK`, `ResetAvatarNames`, AVB loading,
+  and backdrop loading follow the original call order and active-directory
+  state. The host adapter supplies only case-insensitive lookup beneath the
+  authoritative source root; every selected AVB/BGB/BMP remains the directly
+  stored file.
+- `original-ui-structure` covers one-shot character forwarding, both Tab
+  directions, the allowed and connecting-room double-click branches,
+  embedded-preview registration/restrictions, source-resource invalid-art
+  recovery, explicit non-comic apply with no pre-apply state mutation, and
+  per-document default ArtDir reset. `original-avb` switches
+  between the distinct real `ComicArt` and `artpack1` inventories, exercises
+  case-insensitive direct AVB/BGB loads, and rejects an incomplete source art
+  directory. Core avatar tests initialize the same default ArtDir as startup.
+- Debugger evidence established three Qt-only boundaries without changing
+  product behavior: QWidget consumed Tab before `keyPressEvent`, so `event`
+  supplies the source `OnGetDlgCode` distinction; the offscreen clipboard may
+  expose no `QMimeData`, so command-UI probing uses a null guard; and core
+  avatar fixtures lacked startup `InitVals`, producing `_NoArt` until the
+  fixtures entered the production ArtDir path. The visible-frame focus/modal
+  fixture is returned to its prior hidden MDI state before the existing MDI
+  lifecycle assertions.
+- Debug and Release builds complete, all 45 CTests pass in both builds, and
+  isolated Debug and Release offscreen starts remain alive through the
+  intentional three-second timeout. No asset is copied, converted, generated,
+  or downloaded. WinInet avatar/RealInfo download mechanics remain deferred
+  and non-gating.
 
 ### Completed work block: member-list parity
 
@@ -490,7 +606,7 @@ A successful build does not establish original parity for these items.
 | Startup/login | `chat.cpp`, `setupdlg.cpp`, `chatsrv.cpp`, `ircsock.cpp`, and `../artifacts/inc/ccommon.h` selected by the original build | The invented fallback nick `ComicChat` and invented separate port control are removed. `NoMachine` is source-backed: `ircsock.cpp` uses `g_szNoMachine`, whose build-selected definition is exactly `"NoMachine"`. Defaults, DDV nick validation, on-connect action, resource status, service/group model, five-socket connector, password dialog, Auth 0/1, retry/reconnect, and IRC/IRCX detection are ported. Windows SSPI Auth 2/3 is deferred and non-gating. |
 | IRC parser/dispatch | `ircsock.cpp`, `ircsock.h` | The shared line parser, original command table, command/result/error handlers, status descriptors, stateful numerics, and query cleanup required by the source are ported. A complete source-token audit leaves no unrepresented command, result, or error value; the `905` nick/property alias and exact-text command branches are documented. SSPI-only branches are excluded by the deferred scope. |
 | Comic core | `pageview.cpp`, `panel.cpp`, `balloon.cpp`, geometry modules | The invented Qt path with fixed rectangles, ellipses, a stick figure, and parallel `nick/text` lists is removed. Messages pass through `CChatDoc::AddLine` and the original `CUnitPanelPage`, `CUnitPanel`, `CBody*`, and `CBWoodring*` classes. Resize history replay, URL handoff/hits, avatar/label hit tests, comic/member context menus, on-screen iteration of every `CPage`, and the view-printing chain have source-bound regressions. The original defines no page stacking: `AddNewPage()` places every page at `(0,0)` and leaves position calculation as a TODO. The Qt port preserves that overlap and records visual stacking as `unresolved`. |
-| Avatar/backdrop I/O | `avbfile.cpp`, `avatar.cpp`, `backdrop.cpp`, `dib.cpp` | The format core and production drawing are ported: AVB/BGB, DIB/zlib, palettes, masks, lazy pose loading, real icons, avatar index, separate screen/printer backdrop caches, source rectangles, and BMP/BGB backdrops are read directly from original files. Art-pack switching remains; web download is deferred and non-gating. |
+| Avatar/backdrop I/O | `avbfile.cpp`, `avatar.cpp`, `backdrop.cpp`, `dib.cpp` | The format core and production drawing are ported: AVB/BGB, DIB/zlib, palettes, masks, lazy pose loading, real icons, avatar index, separate screen/printer backdrop caches, source rectangles, and BMP/BGB backdrops are read directly from original files. `SetArtDir` switches the shared active avatar/backdrop directory between directly stored source art packs and resets each new document to the source default. Web download remains deferred and non-gating. |
 | Assets | Original accesses in `chat.cpp`, `avatar.cpp`, `backdrop.cpp`, `chat.rc`; the v1 setup resources name `COMIC.TTF` and install the matching shared file | Fixed for bundled image/art data: `originalassets.*` accepts only existing canonical original paths; `dib.*`, `avbfile.*`, and `backdrop.*` read existing formats directly. The restored `v1.0/shared/comic.ttf` is an additional approved source asset and must also be opened in place. No asset copy or conversion is produced. |
 | UI/commands | `chat.rc`, message maps in `chat.cpp`, `chatdoc.cpp`, `mainfrm.cpp` | Main, text, formatting, status, and member menus are read directly from `chat.rc`; the invented normal-path `ShowOriginalTodo` is removed. The three-band coolbar, button styles, context menu, and persistence are ported. Many domain commands and parts of enable/check/accelerator semantics remain disabled pending their original modules. |
 | Text/formatting | `saywnd.cpp`, `rtfctrl.cpp`, `format.cpp`, `textcore.cpp`, `textview.cpp`, `status.cpp`, `whisprbx.cpp` | Generic output placeholders and the missing non-comic echo/receive path are fixed: `CTextView`, `CTextEdit`, `CStatusView`, `CWhisperBox`, TextCore message types, resource headers, 256000/65536 buffers, formatting ranges, separate Doskey history, Say/Whisper formatting handoff, and the original `CIrcPrint`/`AddToStatus` core are active. URL detection/launch, formatted view printing, pre/post rules for `ProcessSay`/`bAddToWhisperBox`, Alt+0..9, the active Far-East DBCS/JIS path, complete IRC status descriptors, and the complete custom text-font UI are connected. MCI/Sound is deferred and non-gating. |
@@ -504,8 +620,8 @@ criteria and tests are satisfied and recorded here.
 | --- | --- | --- |
 | 0. Complete source index | **Complete.** All 313 paths are partitioned into 187 source/build files, 108 binary assets plus `res/chat.rc2`, and 17 auxiliary paths. Every source/build file was read completely; assets were enumerated and checked directly; auxiliary paths were read or classified as binary and marked non-authoritative. | The 84 build objects remain mapped to an original path, Qt destination, or specifically named platform blocker; X-class files remain excluded. |
 | 1. Exact base types and constants | `defines.h`, `resource.h`, `chatprot.h`, query/user/room flags, and limits are partially or incorrectly copied. | Automated compile/unit checks compare every port-relevant numeric value and structure default with the original definitions; no duplicate divergent constant remains. |
-| 2. Direct original assets and image I/O | **Implemented for all bundled image/art assets and direct Comic TTF registration.** Art-pack switching remains separate required integration scope; web download and cache synchronization are deferred and non-gating. | `originalassets.*` opens `res`, `comicart`, and `artpack1` directly under the configured original root; hashes remain unchanged; every bundled AVB/BGB/BMP/DIB/RLE/ICO/GIF file is recognized without a converted copy; metadata, a Simple and Complex avatar pose, and a BMP and BGB backdrop pass through the original parser paths. CMake and the same resolver expose the restored `v1.0/shared/comic.ttf` directly to `QFontDatabase`; clean startup, direct selected-font persistence, the selector, and Reset Defaults retain the source behavior. |
-| 3. Avatar/emotion/BodyCam | Pose/body/emotion/index core, AVB drawing, and BodyCam with original emotion bitmaps, mouse, keyboard, freeze, and send-expression behavior are ported. Character double-click, focus tab cycle, several error/PropertyPage couplings, download/RealInfo, and ArtDir switching are unimplemented. | `avatar.*`, `avatario.*`, `bodycam.*`, `textpose.cpp`, and required geometry produce the same selection/index/emotion results as the original functions; BodyCam draws the selected real avatar using only original emotion bitmaps; mouse, keyboard, freeze, and `<Chr>` paths match the original branches. |
+| 2. Direct original assets and image I/O | **Implemented for all bundled image/art assets, source-defined ArtDir switching, and direct Comic TTF registration.** Web download and cache synchronization are deferred and non-gating. | `originalassets.*` opens `res`, `comicart`, and `artpack1` directly under the configured original root; hashes remain unchanged; every bundled AVB/BGB/BMP/DIB/RLE/ICO/GIF file is recognized without a converted copy; metadata, a Simple and Complex avatar pose, and a BMP and BGB backdrop pass through the original parser paths. `SetArtDir` changes the active direct-file inventory and `ArtDirsOK` validates it without a converted or fallback asset. CMake and the same resolver expose the restored `v1.0/shared/comic.ttf` directly to `QFontDatabase`; clean startup, direct selected-font persistence, the selector, and Reset Defaults retain the source behavior. |
+| 3. Avatar/emotion/BodyCam | **Implemented for the complete non-deferred scope.** Pose/body/emotion/index behavior, AVB drawing, BodyCam mouse and keyboard interaction, Character-page double-click and preview coupling, focus traversal, resource context commands, freeze, legal send-expression, invalid-art recovery, and active ArtDir selection follow their source functions. WinInet download/RealInfo mechanics remain deferred and non-gating. | `avatar.*`, `avatario.*`, `bodycam.*`, `textpose.cpp`, `proppage.*`, and required geometry produce the same selection/index/emotion results as the original functions; BodyCam draws the selected real avatar using only original emotion bitmaps; mouse, keyboard, focus, preview, freeze, `<Chr>`, Character apply/cancel, and ArtDir paths match the original branches. |
 | 4. Comic layout and rendering | Panel/page lifecycle, real backdrops/avatars, speaker/Talk-To order, zoom, collision layout, Woodring balloons, think/whisper/action, scrolling, resize autofit/history reflow, body/label hit testing, selection, tooltip, URL hotlinks, comic/member context menus, starring, on-screen iteration of all pages, and printing are ported. Stacked page positioning is absent from the original and is recorded as `unresolved`, not a port defect. | `CPageView`, `CPage`, `CUnitPanelPage`, `CPanel`, `CUnitPanel`, `CBalloon`, and original geometry modules preserve call order; panels use real backdrops/avatars; wrapping, SplitHeight, tail routing, panel changes, autofit, URL formatting segments, resource context menus, starring, and printer-specific grids derive from original state without substitute graphics or invented dimensions. Multiple pages are drawn, measured, and hit-tested in original list order; the port invents no page spacing. |
 | 5. IRC/IRCX transport and parser | **Implemented for the required priority-1 scope.** The line parser, complete command/result/error surface, required queries, Auth 0/1, service reconnect, raw-byte receive, `CSInString`, ACP, Far-East DBCS/JIS, and CP932 one-chunk behavior are ported. SSPI/Auth 2/3 and IdentD are deferred and excluded. | `ircsock.*`, `ircproto.*`, `query.*`, `intl.*`, JIS/SJIS, and glue handle every required command/numeric with identical arguments, status/query effects, and send strings; socket I/O and Win32 code-page APIs are Qt/platform replacements only. Tests feed only source-derived lines and compare exact outgoing bytes and state changes. |
 | 6. Join, user/room, and starring | Self JOIN, `353`/`366`, enumeration, title/starring, nick/part/quit/kick, avatar assignment, Talk-To, ignore/flood behavior, and the complete source-defined member-list slice are ported and tested. The list/icon status roles, selection/keyboard/context behavior, dynamic Member menu, and all non-deferred member actions follow their original boundaries. | Self JOIN, `353`, `366`, query lifecycle, `CIUserJoin`, `AddToMembersList`, `ProcessEndEnumeration`, `UpdateTitle`, `AddStars`, and `AddStarsAux` follow the documented original path; no invented star appears before real NAMES data ends; unresolved original couplings remain empty rather than being replaced by assumptions. |
@@ -1104,7 +1220,7 @@ and IdentD are explicitly deferred and do not weaken this acceptance claim.
 
 | Area | Source and runtime evidence | Implemented and verified result |
 | --- | --- | --- |
-| Member/Say icons and delayed initial paint | Runtime inspection of the Qt client found text-only members in comic icon mode, blank source-positioned Say buttons, and a stale first frame after the real NAMES enumeration. Source inspection gives three independent causes. First, original `AddToMembersList` calls `AddToImageList`; `CMemberList::OnGetdispinfo` then selects the original avatar's cached 40-pixel image and the ignored/away/operator/spectator/normal status image from `IDB_MEMBER`, while the Qt path inserted text only. Second, original `IDB_SAY_BAR` is `res/balloons.bmp` with `RGB(192,192,192)` as its mask color, but the Qt mask sense was reversed. Third, MFC passes the owning `CChatDoc` through `CCreateContext` when creating `CPageView`; the Qt constructor sampled `GetChatDoc()` before MDI activation and retained null or the wrong document. `paintEvent` therefore produced white cells, while a pointer hit-test lazily sampled the later active document and accidentally made the pending title/panels visible. Screenshot content is not used as a behavior specification; all expected images and state order come from these source paths. | `protsupp.cpp::AddToImageList` now obtains `GetIconPose()->GetDrawing()` from the directly loaded AVB image, caches it under the original avatar's `m_iconIndex`, and stores only a transient `QIcon`; no converted file is created. `CMemberList` maps the original 40-pixel avatar image list and direct `IDB_MEMBER` five-image strip to Qt's icon/list modes, including the original status-priority order, and `ChangeAvatarEntry` uses source-named `UpdateMemberListIcon`. `CSayWnd::createSayBar` reads `IDB_SAY_BAR` in place and applies `MaskInColor` to source gray. `CChatView::CreateComicView` passes its document explicitly to `CPageView`, mechanically replacing MFC's create context; `353` and `366` ordering is unchanged. `original-irc-state` compares every displayed avatar-region pixel with its decoded original icon pose, `original-ui-structure` checks every Say glyph mask pixel against the direct BMP, and `original-mdi-join` renders a non-white source-built initial page in the first event cycle after `366`, without a click or later message. The application target and all tests build, 44/44 CTests pass, isolated offscreen startup remains alive through its intentional timeout, and `git diff --check` is clean. No runtime server, room, nickname, or message value is retained. |
+| Member/Say icons and delayed initial paint | Runtime inspection of the Qt client found text-only members in comic icon mode, blank source-positioned Say buttons, and a stale first frame after the real NAMES enumeration. Source inspection gives three independent causes. First, original `AddToMembersList` calls `AddToImageList`; `CMemberList::OnGetdispinfo` then selects the original avatar's cached 40-pixel image and the ignored/away/operator/spectator/normal status image from `IDB_MEMBER`, while the Qt path inserted text only. Second, original `IDB_SAY_BAR` is `res/balloons.bmp` with `RGB(192,192,192)` as its mask color, but the Qt mask sense was reversed. Third, MFC passes the owning `CChatDoc` through `CCreateContext` when creating `CPageView`; the Qt constructor sampled `GetChatDoc()` before MDI activation and retained null or the wrong document. `paintEvent` therefore produced white cells, while a pointer hit-test lazily sampled the later active document and accidentally made the pending title/panels visible. Screenshot content is not used as a behavior specification; all expected images and state order come from these source paths. | `protsupp.cpp::AddToImageList` obtains `GetIconPose()->GetDrawing()` from the directly loaded AVB image, caches it under the original avatar's `m_iconIndex`, and stores only a transient `QIcon`; no converted file is created. `CMemberList` maps the original 40-pixel avatar image list and direct `IDB_MEMBER` five-image strip to Qt's icon/list modes, including the original status-priority order, and `ChangeAvatarEntry` uses source-named `UpdateMemberListIcon`. `CSayWnd::createSayBar` reads `IDB_SAY_BAR` in place and applies `MaskInColor` to source gray. `CChatView::CreateComicView` passes its document explicitly to `CPageView`, mechanically replacing MFC's create context; `353` and `366` ordering is unchanged. `original-irc-state` compares every displayed avatar-region pixel with its decoded original icon pose, `original-ui-structure` checks every Say glyph mask pixel against the direct BMP, and `original-mdi-join` renders a non-white source-built initial page in the first event cycle after `366`, without a click or later message. The application target and all tests build, 44/44 CTests pass, isolated offscreen startup remains alive through its intentional timeout, and `git diff --check` is clean. No runtime server, room, nickname, or message value is retained. |
 | Initial room send | An authorized IRC reproduction reached `CSayWnd::bLegalToSend` with `CX_NOCHANNEL`. The server-confirmed self `JOIN` then ran `CIUserJoin` and changed the same room to `CX_INCHANNEL`; a subsequent send passed. The original `saywnd.cpp` rejects `CX_NOCHANNEL`, so an earlier invented state change would be incorrect. | The gate remains source-identical. `original-comic-send` verifies the exact `IDS_ILLEGAL_TO_SEND` rejection and unchanged input at `CX_NOCHANNEL`, followed by a successful send and cleared input at `CX_INCHANNEL`. `original-join-starring`, `original-irc-state`, and `original-mdi-join` retain the server-callback transition and initial query coverage. |
 | Say-input crash | The debugger stack repeated `CSplitSay::keyPressEvent` and its Qt `ForwardToSayWnd` adapter until stack exhaustion surfaced inside accelerator resource parsing. Original `CSplitChat::OnChar`, `CSplitChatV::OnChar`, and `CSplitSay::OnChar` synchronously send a newly constructed `WM_CHAR` to `CSayCtrl`; they do not resend the propagating parent event. `CTabBarTabCtrl::OnChar` uses the separate original `ForwardToSayWnd(UINT)` path. | `spltchat.cpp` constructs one fresh synchronous Qt key event for `CSayCtrl`, consumes the source event, and restores focus in the original order. `tabbar.cpp` uses `ForwardToSayWnd(UINT)` and source-defined Tab focus cycling. `original-ui-structure` starts with an ignored parent event and verifies exactly one insertion through each path without recursion. |
 | Missing unformatted comic text | Runtime sending produced a real `CBWoodringNormal` with no formatting array. Port `CBWoodringNormal::Draw` called only `DrawFormattedText`, whose source-backed guard returns for a null array. Original `CBalloon::DrawText` instead selects `DrawFormattedText` only for nonempty formatting and otherwise emits every wrapped line with `TextOut`; the function was absent from the port header and implementation. The original `CLabel::Draw` contains the same formatted/unformatted selection, which the port also omitted. | `CLabel::Draw` and restored `CBalloon::DrawText` select the original branch and line-height progression. `CBWoodringNormal::Draw` calls `DrawText`. `original-comic-core` renders the source `ID_STARRING` label and continuation string into otherwise white images and requires glyph ink without a contour or avatar. |
@@ -1128,7 +1244,8 @@ and IdentD are explicitly deferred and do not weaken this acceptance claim.
 | `dib.*`, `avbfile.*`, `avatar.*`, `avatario.*`, and `vector2d.*` | Original packed records, a QFile stream with original reference-count semantics, palettes, DIB/zlib, lazy poses, MaskedMono/DualMask, Simple/Complex records, neutral/emotion/index paths, and avatar index are ported. Qt-only `wincompat.h` contains only fixed Win32 type/bitmap layouts. No file is converted or copied; `QImage` is only the transient GDI replacement. |
 | AVB/DIB production-data tests | `original-avb` directly reads all 45 AVB files from `comicart`, `artpack1`, and `archive`, indexes every real avatar, selects its original neutral body, and lazily loads its real icon. It also reads all 43 directly stored BMP/DIB/RLE files from `res` and `archive`. Several BMPs contain two bytes after the final padded scanline; they are accepted exactly as by the original `CAvatarDIB::Load`. Four CTests cover this boundary. |
 | BGB/backdrop implementation from `backdrop.*` and `avbfile.cpp` | `CChatBackdrop::LoadBackdrop`, `LoadFromBmp`, and `Load` follow the original BMP, magic `0x8181`, type, version, tag, and offset branches. `original-avb` opens all nine BGB files from `comicart` and `artpack1`, preserves URL/copyright, and loads the real backdrop pose. The build and four CTests cover the bundled local assets. |
-| `bodycam.h/.cpp`, avatar drawing, and `chat.rc` strings | Ported evidence includes `MAXBULL=159`, `MINBULL=93`, cursor/icon dimensions `5/20/26`, bullseye center and two-stage radius, eight angles, 20-percent neutral detent, `StringFromEmotion`, status updates only during MouseDown, temporary freeze, arrow-key snap tables, the Ctrl/Shift pixel branch, exact freeze toggle, and `<Chr>`. Character double-click has no substitute dialog until its `proppage.*` counterpart is implemented. `originalassets.*` replaces `CString::LoadString`/`CMenu::LoadMenu` by reading strings and menu entries directly from `chat.rc`. |
+| `bodycam.h/.cpp`, avatar drawing, and `chat.rc` strings | Ported evidence includes `MAXBULL=159`, `MINBULL=93`, cursor/icon dimensions `5/20/26`, bullseye center and two-stage radius, eight angles, 20-percent neutral detent, `StringFromEmotion`, status updates only during MouseDown, temporary freeze, arrow-key snap tables, the Ctrl/Shift pixel branch, exact freeze toggle, and `<Chr>`. The source-defined Character-page double-click, main-BodyCam Tab cycle and character forwarding, `DLGC_WANTALLKEYS`/`DLGC_WANTARROWS` distinction, embedded-preview context restriction, Shift+F10 position, and global `bLegalToSend` gate are connected through Qt events. `originalassets.*` replaces `CString::LoadString`/`CMenu::LoadMenu` by reading strings and menu entries directly from `chat.rc`. |
+| Active ArtDir and Character-page integration | `SetArtDir` and `ArtDirsOK` in `protsupp.*` maintain the source fields in `CChatApp`; `avatario.*` and `backdrop.*` enumerate and load only that shared active directory; `CChatDoc::InitMyDocument` restores `m_strDefaultArtDir`. `CCharacterPage` uses the original `GetAvatar2`/`GetAvatar3("X")` fallback, guarded preview pointer, decoded copyright, `IDS_INVALIDART` recovery, and `ChangeAvatarEntry`/`SetMyAvatar` apply split. Direct tests use the distinct real `ComicArt` and `artpack1` inventories, preserve case-insensitive Win32 filename lookup on the host adapter, and create no copied or converted asset. |
 | `CBodySingle::DrawBody` / `CBodyDouble::DrawBody` | The original methods remain in `bodycam.cpp`. `GetBodyBox`, `FlipBodyBox`, bottom-center scaling, head/torso offsets, `TORSOFIRST`, `HEADMASK`, `TORSOMASK`, aura `MERGEPAINT`, and drawing `SRCAND` target a transient QImage buffer. `CDIB::Draw` emulates only the three source-backed GDI ROPs and negative destination widths; it creates no converted asset. `original-avb` renders all 45 real neutral poses and requires nonempty geometry and image pixels for each. Four CTests cover this path. |
 | Avatar startup and enumeration glue | An empty Character field at application startup follows the `LoadFromReg` fallback through `GetNextAvatarName` and unsorted original AVB enumeration. `StartHistoryEntry::Execute` sets the title and avatar when starting a room; `SetMyAvatar`, `RefreshBodyCam`, and `AssignArbitraryAvatar` retain their original names. Other users receive avatars only from real `353` members; no local dummy member or starring name is created. The non-canonical placeholder `wmini.cpp` is excluded from CMake. |
 | Comic geometry in `bbox.*`, `traj.*`, `spline.*`, `splinutl.cpp`, `arc.cpp`, `semantic.cpp`, and `pe.h` | Active original algorithms for bounding-box operations, lines/arcs, manual `100/100` dashing, cardinal/beta splines, matrix caches, Bezier splitting, flatness, nearest point, flattening, and horizontal walking are ported under original filenames. `QPainterPath` replaces only the GDI path. Notable source semantics such as `bbox_within_bbox`, the return value of `bbox_intersect`, and the cardinal cache key are preserved. `semantic.cpp` has no active production path in the canonical build: `AddSemantics` is empty and the experimental code is inside `#if 0`. |
@@ -1300,7 +1417,7 @@ This analysis is the binding basis for the Qt port. It describes only behavior v
 | Comic output | `pageview.*`, `panel.*`, `balloon.*`, `wmini.cpp` | `IDR_VIEWCONTEXT`, `IDR_AVATARCONTEXT`, `ID_STARRING`, title strings | Left upper comic area. | Pages draw panels; title/starring from `AddTitle`/`UpdateTitle`; stars from real `g_mapNickToPtr`; balloons from source geometry. | `src/original/pageview.*`, `src/original/panel.*`, `src/original/balloon.*`; excluded `wmini.cpp` only if proven active |
 | Input/Say window | `saywnd.*`, `rtfctrl.*`, `format.cpp` | `ID_SAYCTRL`, Say bar, send/action/sound/format commands, `IDR_FORMATTING` | Lower left/input area. | Enter sends through `bChatSendText`; buttons invoke original handlers; RTF control handles formatting, accelerators, context, Doskey; format core maps control codes/URLs. | `src/original/saywnd.*`, `src/original/rtfctrl.*`, `src/original/format.cpp` |
 | Member list | `memblst.*`, `userinfo.*`, `protsupp.*` | `IDB_MEMBER`, `IDR_MEMBERCONTEXT`, `IDR_IRC_MEMBER`, `IDR_MEMBERADMIN`, member commands | Right upper comic area or right text area. | Direct avatar/status icon and list modes, source sorting, test labels, selection/focus and Tab/character handling, single-selection profile double-click, mouse/keyboard resource contexts, dynamic Get Character, role radios, and protocol-driven insert/remove. | `src/original/memblst.*`, `src/original/userinfo.*`, `src/original/protsupp.*` |
-| BodyCam | `bodycam.*`, `avatar.*`, `avatario.*`, `textpose.cpp` | body context, emotion strings, face icons | Lower-right pane. | Draws avatar preview and emotion wheel; mouse/keys update `CEmotion`; freeze/send-expression use source commands; emotion bytes from `avatario.*`. | `src/original/bodycam.*`, `src/original/avatar.*`, `src/original/avatario.*`, `src/original/textpose.cpp` |
+| BodyCam | `bodycam.*`, `avatar.*`, `avatario.*`, `textpose.cpp` | body context, emotion strings, face icons | Lower-right pane; embedded Character preview in `IDD_CHARACTERPAGE`. | Draws avatar preview and emotion wheel; mouse/keys update `CEmotion`; ordinary characters and Tab use the source Say/focus path; double-click opens the Character page only under the source conditions; the embedded preview suppresses recursive double-click/context behavior; freeze/send-expression use source commands; emotion bytes come from `avatario.*`. | `src/original/bodycam.*`, `src/original/avatar.*`, `src/original/avatario.*`, `src/original/textpose.cpp`; Character host in `src/original/proppage.*` |
 | Connect/setup/options/room dialogs | `setupdlg.*`, `proppage.*`, `chanprop.*`, `chat.rc` | setup, settings, personal, character, background, servers, channel, properties, create resources | Modal property sheets/dialogs. | Servers/favorites/channel, join/list/connect-only actions, identity/profile, art previews, server/security config, enter room, room properties, and create room all use source controls and validation. | `src/original/setupdlg.*`, `src/original/proppage.*`, `src/original/chanprop.*` |
 
 ## Qt Port: Original Join And Starring Flow

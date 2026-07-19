@@ -12,7 +12,10 @@
 #include "memblst.h"
 #include "originalassets.h"
 #include "panel.h"
+#include "proppage.h"
+#include "protsupp.h"
 #include "saywnd.h"
+#include "setupdlg.h"
 #include "spltchat.h"
 #include "status.h"
 #include "tabbar.h"
@@ -21,16 +24,26 @@
 
 #include <QApplication>
 #include <QAction>
+#include <QContextMenuEvent>
+#include <QDialog>
+#include <QDir>
+#include <QFileInfo>
 #include <QLabel>
+#include <QListWidget>
 #include <QMenuBar>
 #include <QMenu>
+#include <QMessageBox>
 #include <QMdiArea>
 #include <QDebug>
 #include <QImage>
 #include <QKeyEvent>
+#include <QMouseEvent>
+#include <QSignalBlocker>
 #include <QStatusBar>
+#include <QTabWidget>
 #include <QToolBar>
 #include <QTextCursor>
+#include <QTimer>
 
 #include <cmath>
 #include <cstdlib>
@@ -242,6 +255,22 @@ int main(int argc, char** argv)
     InitializeAvatars();
     LoadEmotionStrings();
 
+    SetArtDir("artpack1");
+    {
+        CChatDoc artResetDocument;
+        artResetDocument.m_bComicView = false;
+        SetChatDoc(&artResetDocument);
+        if (!ArtDirsOK()
+            || QFileInfo(theApp.GetAvatarDir()).fileName().compare(
+                   QStringLiteral("comicart"), Qt::CaseInsensitive) != 0
+            || theApp.GetAvatarDir() != theApp.GetBackDropDir()) {
+            qWarning() << "document default ArtDir reset"
+                       << theApp.GetAvatarDir() << theApp.GetBackDropDir();
+            return EXIT_FAILURE;
+        }
+        SetChatDoc(nullptr);
+    }
+
     {
         CChatDoc forwardingDocument;
         SetChatDoc(&forwardingDocument);
@@ -333,6 +362,9 @@ int main(int argc, char** argv)
     CChatDoc document;
     SetChatDoc(&document);
     CMainFrame frame(&document);
+    theApp.m_pMainWnd = &frame;
+    frame.show();
+    application.processEvents();
     frame.UpdateMacroMenu();
 
     int comicFontActions = 0;
@@ -354,6 +386,229 @@ int main(int argc, char** argv)
         qWarning() << "mdi initial" << frame.GetActiveDocument()
                    << document.GetTitle();
         return EXIT_FAILURE;
+    }
+
+    {
+        CBodyCam* bodyCam = document.m_bodyCam;
+        auto* sayWindow = dynamic_cast<CSayWnd*>(document.m_sayWnd);
+        if (!bodyCam || !sayWindow || !document.m_memberList)
+            return EXIT_FAILURE;
+
+        const QString sourceCharacter = originalResourceString(
+            QStringLiteral("IDS_DEFAULT_NICK")).left(1);
+        sayWindow->GetSayEdit()->clear();
+        bodyCam->setFocus();
+        application.processEvents();
+        QKeyEvent characterEvent(QEvent::KeyPress, 0, Qt::NoModifier,
+                                 sourceCharacter);
+        QApplication::sendEvent(bodyCam, &characterEvent);
+        if (sayWindow->GetSayEdit()->toPlainText() != sourceCharacter
+            || QApplication::focusWidget() != sayWindow->GetSayEdit()) {
+            qWarning() << "BodyCam character forwarding"
+                       << sayWindow->GetSayEdit()->toPlainText()
+                       << QApplication::focusWidget();
+            return EXIT_FAILURE;
+        }
+
+        bodyCam->setFocus();
+        QKeyEvent tabEvent(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+        QApplication::sendEvent(bodyCam, &tabEvent);
+        application.processEvents();
+        if (!frame.GetTabBar()->TabControl()->hasFocus()) {
+            qWarning() << "BodyCam forward focus cycle"
+                       << QApplication::focusWidget();
+            return EXIT_FAILURE;
+        }
+
+        bodyCam->setFocus();
+        QKeyEvent backtabEvent(QEvent::KeyPress, Qt::Key_Backtab,
+                               Qt::ShiftModifier);
+        QApplication::sendEvent(bodyCam, &backtabEvent);
+        application.processEvents();
+        if (!document.m_memberList->FocusWidget()->hasFocus()) {
+            qWarning() << "BodyCam backward focus cycle"
+                       << QApplication::focusWidget();
+            return EXIT_FAILURE;
+        }
+
+        bool optionsSeen = false;
+        bool characterPageSelected = false;
+        QTimer::singleShot(0, [&] {
+            for (QWidget* widget : QApplication::topLevelWidgets()) {
+                auto* dialog = dynamic_cast<QDialog*>(widget);
+                if (!dialog || dialog->windowTitle()
+                        != originalResourceString(QStringLiteral("IDS_OPTIONS"))) {
+                    continue;
+                }
+                optionsSeen = true;
+                QTabWidget* tabs = dialog->findChild<QTabWidget*>();
+                characterPageSelected = tabs
+                    && dynamic_cast<CCharacterPage*>(tabs->currentWidget());
+                dialog->reject();
+            }
+        });
+        const QPointF doubleClickPoint(1.0, 1.0);
+        QMouseEvent doubleClick(
+            QEvent::MouseButtonDblClick, doubleClickPoint, doubleClickPoint,
+            QPointF(bodyCam->mapToGlobal(QPoint(1, 1))), Qt::LeftButton,
+            Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(bodyCam, &doubleClick);
+        if (!optionsSeen || !characterPageSelected) {
+            qWarning() << "BodyCam character-page double click"
+                       << optionsSeen << characterPageSelected;
+            return EXIT_FAILURE;
+        }
+
+        const ConnectionStatus savedStatus = document.GetConnectionStatus();
+        document.m_proto->SetConnectionStatus(CX_CONNECTING);
+        bool optionsWhileConnecting = false;
+        QTimer::singleShot(0, [&] {
+            for (QWidget* widget : QApplication::topLevelWidgets()) {
+                auto* dialog = dynamic_cast<QDialog*>(widget);
+                if (!dialog || dialog->windowTitle()
+                        != originalResourceString(QStringLiteral("IDS_OPTIONS"))) {
+                    continue;
+                }
+                optionsWhileConnecting = true;
+                dialog->reject();
+            }
+        });
+        QMouseEvent connectingDoubleClick(
+            QEvent::MouseButtonDblClick, doubleClickPoint, doubleClickPoint,
+            QPointF(bodyCam->mapToGlobal(QPoint(1, 1))), Qt::LeftButton,
+            Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(bodyCam, &connectingDoubleClick);
+        application.processEvents();
+        document.m_proto->SetConnectionStatus(savedStatus);
+        if (optionsWhileConnecting) {
+            qWarning() << "BodyCam opened Character page while connecting";
+            return EXIT_FAILURE;
+        }
+    }
+
+    {
+        CCharacterPage characterPage(&frame);
+        CBodyCam* preview = nullptr;
+        for (QWidget* child : characterPage.findChildren<QWidget*>()) {
+            if ((preview = dynamic_cast<CBodyCam*>(child))) break;
+        }
+        QListWidget* avatarList = characterPage.findChild<QListWidget*>();
+        if (!preview || !avatarList || preview->m_forcedDelete
+            || !preview->m_avatar) {
+            qWarning() << "Character-page BodyCam setup" << preview
+                       << avatarList;
+            return EXIT_FAILURE;
+        }
+
+        characterPage.show();
+        application.processEvents();
+        if (GetCharSelBodyCam() != preview
+            || !RefreshBodyPreview(preview->m_avatar)) {
+            qWarning() << "Character-page preview registration";
+            return EXIT_FAILURE;
+        }
+
+        QContextMenuEvent previewContext(
+            QContextMenuEvent::Mouse, QPoint(2, 2),
+            preview->mapToGlobal(QPoint(2, 2)));
+        QApplication::sendEvent(preview, &previewContext);
+        application.processEvents();
+        for (QWidget* widget : QApplication::topLevelWidgets()) {
+            if (qobject_cast<QMenu*>(widget) && widget->isVisible()) {
+                qWarning() << "Character-page preview exposed a context menu";
+                return EXIT_FAILURE;
+            }
+        }
+
+        QString inactiveAvatar;
+        const QFileInfoList artPackFiles = QDir(
+            originalAssetDirectoryPath(QStringLiteral("artpack1")))
+            .entryInfoList(QDir::Files, QDir::Name);
+        for (const QFileInfo& file : artPackFiles) {
+            if (file.suffix().compare(QStringLiteral("avb"),
+                                      Qt::CaseInsensitive) != 0) {
+                continue;
+            }
+            const QString candidate = file.completeBaseName();
+            const QString activeFile = originalFileInDirectoryPath(
+                theApp.GetAvatarDir(), candidate + QStringLiteral(".avb"));
+            if (activeFile.isEmpty() && !GetAvatar(candidate)) {
+                inactiveAvatar = candidate;
+                break;
+            }
+        }
+        if (inactiveAvatar.isEmpty()) return EXIT_FAILURE;
+
+        const QString previousAvatar = QString::fromUtf8(
+            preview->m_avatar->OriginalName());
+        QString displayName = inactiveAvatar;
+        displayName[0] = displayName[0].toUpper();
+        auto* unavailableItem = new QListWidgetItem(displayName, avatarList);
+        unavailableItem->setData(Qt::UserRole, inactiveAvatar);
+        QString shownMessage;
+        QTimer::singleShot(0, [&] {
+            for (QWidget* widget : QApplication::topLevelWidgets()) {
+                auto* message = dynamic_cast<QMessageBox*>(widget);
+                if (!message) continue;
+                shownMessage = message->text();
+                message->accept();
+            }
+        });
+        avatarList->setCurrentItem(unavailableItem);
+        QString expectedMessage = originalResourceString(
+            QStringLiteral("IDS_INVALIDART"));
+        expectedMessage.replace(QStringLiteral("%1"), displayName);
+        if (shownMessage != expectedMessage
+            || !avatarList->currentItem()
+            || avatarList->currentItem()->data(Qt::UserRole).toString().compare(
+                   previousAvatar, Qt::CaseInsensitive) != 0
+            || QString::fromUtf8(preview->m_avatar->OriginalName()).compare(
+                   previousAvatar, Qt::CaseInsensitive) != 0) {
+            qWarning() << "Character-page invalid art recovery"
+                       << shownMessage << expectedMessage;
+            return EXIT_FAILURE;
+        }
+        {
+            const QSignalBlocker blocker(avatarList);
+            delete avatarList->takeItem(avatarList->row(unavailableItem));
+        }
+
+        const QString savedCharacter = QString::fromUtf8(GetMyCharacter());
+        QListWidgetItem* applyItem = nullptr;
+        for (int index = 0; index < avatarList->count(); ++index) {
+            QListWidgetItem* candidate = avatarList->item(index);
+            const QString candidateName = candidate->data(Qt::UserRole).toString();
+            if (candidateName.compare(savedCharacter, Qt::CaseInsensitive) != 0
+                && GetAvatar2(candidateName)) {
+                applyItem = candidate;
+                break;
+            }
+        }
+        if (!applyItem) return EXIT_FAILURE;
+        avatarList->setCurrentItem(applyItem);
+        application.processEvents();
+        const QString selectedCharacter = applyItem->data(Qt::UserRole).toString();
+        if (QString::fromUtf8(GetMyCharacter()) != savedCharacter) {
+            qWarning() << "Character selection changed application state before apply";
+            return EXIT_FAILURE;
+        }
+        const bool savedComicView = document.m_bComicView;
+        document.m_bComicView = false;
+        characterPage.apply();
+        document.m_bComicView = savedComicView;
+        if (QString::fromUtf8(GetMyCharacter()).compare(
+                selectedCharacter, Qt::CaseInsensitive) != 0) {
+            qWarning() << "Character-page non-comic apply";
+            return EXIT_FAILURE;
+        }
+        SetMyCharacter(savedCharacter);
+
+        characterPage.hide();
+        application.processEvents();
+        if (GetCharSelBodyCam()) {
+            qWarning() << "hidden Character-page preview remained registered";
+            return EXIT_FAILURE;
+        }
     }
 
     {
@@ -441,6 +696,16 @@ int main(int argc, char** argv)
         theApp.m_myNick = savedNick;
         theApp.m_iAutoPage = savedAutoPage;
     }
+
+    // The focused interaction checks require a visible, registered main
+    // frame. Restore the pre-existing structure-test harness before its MDI
+    // lifecycle checks; the offscreen plugin cannot reactivate a hidden
+    // top-level window after nested modal loops.
+    frame.hide();
+    theApp.m_pMainWnd = nullptr;
+    frame.ActivateDocument(&document);
+    SetChatDoc(&document);
+    application.processEvents();
 
     CChatDoc* statusDocument = frame.CreateStatusWindow();
     if (!statusDocument || !statusDocument->m_bStatusView

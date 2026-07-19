@@ -23,6 +23,8 @@ class QLineEdit;
 class QListWidget;
 class QPushButton;
 class QRadioButton;
+class QHideEvent;
+class QShowEvent;
 class QSpinBox;
 class QTextEdit;
 
@@ -50,8 +52,13 @@ CPersonalPage* GetPersonalPage();
 class CCharacterPage final : public QWidget {
 public:
     explicit CCharacterPage(QWidget* parent = nullptr);
+    ~CCharacterPage() override;
 
     void apply();
+
+protected:
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
 
 private:
     void selectAvatar();

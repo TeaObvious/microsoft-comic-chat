@@ -1,7 +1,10 @@
 #include "avatar.h"
 #include "avbfile.h"
+#include "avatario.h"
 #include "backdrop.h"
+#include "chat.h"
 #include "originalassets.h"
+#include "protsupp.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -94,6 +97,7 @@ bool loadBackdropFile(const QString& path)
 int main(int argc, char** argv)
 {
     QCoreApplication application(argc, argv);
+    theApp.InitVals();
     InitializeAvatars();
 
     bool okay = true;
@@ -158,5 +162,62 @@ int main(int argc, char** argv)
     }
 
     DestroyAvatars();
+
+    SetArtDir("ARTPACK1");
+    const QString artPackDirectory = QFileInfo(
+        QDir(root).filePath(QStringLiteral("artpack1"))).canonicalFilePath();
+    const QStringList artPackAvatars = OriginalAvatarNames();
+    const QStringList artPackBackdrops = OriginalBackdropNames();
+    if (!ArtDirsOK()
+        || theApp.GetAvatarDir() != artPackDirectory
+        || theApp.GetBackDropDir() != artPackDirectory
+        || !artPackAvatars.contains(QStringLiteral("kevin"),
+                                    Qt::CaseInsensitive)
+        || artPackAvatars.contains(QStringLiteral("anna"),
+                                   Qt::CaseInsensitive)
+        || !artPackBackdrops.contains(QStringLiteral("den.bgb"),
+                                      Qt::CaseInsensitive)
+        || !artPackBackdrops.contains(QStringLiteral("volcano.bgb"),
+                                      Qt::CaseInsensitive)) {
+        okay &= failure(artPackDirectory,
+                        "SetArtDir did not select the original artpack1 inventory");
+    }
+
+    CAvatarX* artPackAvatar = LoadAvatarInfo(QStringLiteral("KEVIN"));
+    if (!artPackAvatar) {
+        okay &= failure(artPackDirectory,
+                        "case-insensitive Win32 AVB lookup was not preserved");
+    }
+    delete artPackAvatar;
+    CChatBackdrop* artPackBackdrop = LoadBackdropInfo(
+        QStringLiteral("DEN.BGB"));
+    if (!artPackBackdrop) {
+        okay &= failure(artPackDirectory,
+                        "case-insensitive Win32 BGB lookup was not preserved");
+    }
+    delete artPackBackdrop;
+
+    SetArtDir("ComicArt");
+    const QString comicArtDirectory = QFileInfo(
+        QDir(root).filePath(QStringLiteral("comicart"))).canonicalFilePath();
+    const QStringList comicArtAvatars = OriginalAvatarNames();
+    if (!ArtDirsOK()
+        || theApp.GetAvatarDir() != comicArtDirectory
+        || theApp.GetBackDropDir() != comicArtDirectory
+        || !comicArtAvatars.contains(QStringLiteral("anna"),
+                                     Qt::CaseInsensitive)
+        || comicArtAvatars.contains(QStringLiteral("kevin"),
+                                    Qt::CaseInsensitive)) {
+        okay &= failure(comicArtDirectory,
+                        "SetArtDir did not restore the original ComicArt inventory");
+    }
+
+    SetArtDir("res");
+    if (ArtDirsOK()) {
+        okay &= failure(theApp.GetAvatarDir(),
+                        "ArtDirsOK accepted a directory without an AVB file");
+    }
+    SetArtDir("ComicArt");
+
     return okay ? 0 : 1;
 }

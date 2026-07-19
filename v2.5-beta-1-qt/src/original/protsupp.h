@@ -31,6 +31,8 @@ BOOL bReplaceMacroTokens(QString& message, BOOL in);
 bool ToggleSendComicsData();
 void SetSendComicsData(bool sendComicsData);
 bool GetSendComicsData();
+void SetArtDir(const char* artDir);
+BOOL ArtDirsOK();
 BOOL bCanViewUnrated(BOOL promptOverride = FALSE);
 BOOL bPassesRatings(const QString& rating,
                     BOOL promptOverride = FALSE);

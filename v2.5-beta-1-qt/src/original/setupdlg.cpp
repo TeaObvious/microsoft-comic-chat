@@ -306,6 +306,13 @@ void CChatApp::InitVals()
     m_strFavoritesDir.clear();
     m_strChatRooms.clear();
     m_strFileTXDir.clear();
+    m_strBaseDir = originalAssetRoot();
+    m_strDefaultArtDir = QStringLiteral("ComicArt");
+    m_strAvatarDir.clear();
+    m_strBackDropDir.clear();
+    m_bFoundArt = false;
+    const QByteArray defaultArtDir = m_strDefaultArtDir.toLocal8Bit();
+    SetArtDir(defaultArtDir.constData());
     m_soundPath.clear();
 
     m_strGreetingMesg = originalResourceString(QStringLiteral("IDS_DEFAULTGREETING"));

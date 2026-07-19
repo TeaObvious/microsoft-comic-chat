@@ -44,6 +44,7 @@ int main(int argc, char** argv)
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
+    theApp.InitVals();
 
     const int comicFontId = registerOriginalComicFont();
     require(comicFontId >= 0);

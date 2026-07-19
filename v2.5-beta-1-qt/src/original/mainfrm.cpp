@@ -807,9 +807,11 @@ void CMainFrame::updateCommandUi()
     setActionsEnabled(m_commandActions, QStringLiteral("ID_EDIT_COPY"), hasSelection);
     setActionsEnabled(m_commandActions, QStringLiteral("ID_EDIT_DELETE"),
                       hasSelection && !edit->isReadOnly());
+    const QClipboard* clipboard = QApplication::clipboard();
+    const QMimeData* clipboardData = clipboard ? clipboard->mimeData() : nullptr;
     setActionsEnabled(m_commandActions, QStringLiteral("ID_EDIT_PASTE"),
                       edit && !edit->isReadOnly()
-                          && QApplication::clipboard()->mimeData()->hasText());
+                          && clipboardData && clipboardData->hasText());
     setActionsEnabled(m_commandActions, QStringLiteral("ID_EDIT_SELECTALL"), edit != nullptr);
 }
 

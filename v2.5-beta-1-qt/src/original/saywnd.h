@@ -89,7 +89,6 @@ protected:
 private:
     void initialize();
     void createSayBar();
-    bool bLegalToSend(bool privateMessage = false);
     void showOriginalMessage(const QString& identifier);
 
     CSayCtrl* m_wndSayCtrl = nullptr;
@@ -98,3 +97,4 @@ private:
 };
 
 CSayWnd* GetSay();
+BOOL bLegalToSend(BOOL privateMessage = FALSE);

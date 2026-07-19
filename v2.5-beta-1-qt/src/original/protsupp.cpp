@@ -33,6 +33,8 @@
 #include <QCheckBox>
 #include <QDateTime>
 #include <QDesktopServices>
+#include <QDir>
+#include <QFileInfo>
 #include <QIcon>
 #include <QLocale>
 #include <QMessageBox>
@@ -50,6 +52,52 @@ BOOL g_bCXPrompt = TRUE;
 BOOL g_bEnterOnCreate = FALSE;
 BOOL g_bCanViewUnrated = TRUE;
 static QList<CUserInfo*> externalPuis;
+
+void SetArtDir(const char* artDir)
+{
+    if (!artDir) return;
+    QString relative = QString::fromLocal8Bit(artDir);
+    relative.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    const QString directory = originalAssetDirectoryPath(relative);
+    if (directory == theApp.m_strBackDropDir) return;
+
+    theApp.m_strBackDropDir = directory;
+    theApp.m_strAvatarDir = directory;
+    theApp.m_bFoundArt = ArtDirsOK();
+    ResetAvatarNames();
+}
+
+BOOL ArtDirsOK()
+{
+    if (theApp.GetBackDropDir().isEmpty()
+        || theApp.GetAvatarDir().isEmpty()) {
+        return FALSE;
+    }
+    const QDir backdropDirectory(theApp.GetBackDropDir());
+    const QDir avatarDirectory(theApp.GetAvatarDir());
+    bool foundBackdrop = false;
+    for (const QFileInfo& info : backdropDirectory.entryInfoList(
+             QDir::Files | QDir::NoDotAndDotDot, QDir::NoSort)) {
+        const QString suffix = info.suffix();
+        if (suffix.compare(QStringLiteral("bmp"), Qt::CaseInsensitive) == 0
+            || suffix.compare(QStringLiteral("bgb"),
+                              Qt::CaseInsensitive) == 0) {
+            foundBackdrop = true;
+            break;
+        }
+    }
+
+    bool foundAvatar = false;
+    for (const QFileInfo& info : avatarDirectory.entryInfoList(
+             QDir::Files | QDir::NoDotAndDotDot, QDir::NoSort)) {
+        if (info.suffix().compare(QStringLiteral("avb"),
+                                  Qt::CaseInsensitive) == 0) {
+            foundAvatar = true;
+            break;
+        }
+    }
+    return foundBackdrop && foundAvatar;
+}
 
 namespace {
 bool g_bSendComicsData = true;

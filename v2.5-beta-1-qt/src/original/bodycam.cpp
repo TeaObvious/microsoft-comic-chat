@@ -8,10 +8,12 @@
 #include "backdrop.h"
 #include "chat.h"
 #include "chatdoc.h"
+#include "memblst.h"
 #include "protsupp.h"
 #include "resource.h"
 #include "paintdc.h"
 #include "originalassets.h"
+#include "saywnd.h"
 #include "vector2d.h"
 
 #include <QApplication>
@@ -31,6 +33,7 @@
 
 namespace {
 QString emotionName[9];
+QPointer<CBodyCam> characterSelectionBodyCam;
 
 const QVector<QImage>& bodyCamIcons()
 {
@@ -265,6 +268,16 @@ void CBodyCam::RefreshBody()
 
 bool CBodyCam::event(QEvent* event)
 {
+    // Original OnGetDlgCode returns DLGC_WANTALLKEYS only for the main
+    // BodyCam. Intercept Tab before QWidget performs its own focus traversal;
+    // the embedded Character-page preview retains normal dialog traversal.
+    if (event->type() == QEvent::KeyPress && m_forcedDelete) {
+        auto* key = static_cast<QKeyEvent*>(event);
+        if (key->key() == Qt::Key_Tab || key->key() == Qt::Key_Backtab) {
+            keyPressEvent(key);
+            return true;
+        }
+    }
     if (event->type() == QEvent::ToolTip && !m_bullDisabled) {
         const auto* help = static_cast<QHelpEvent*>(event);
         for (int index = 0; index < NEMOTIONS; ++index) {
@@ -322,9 +335,7 @@ void CBodyCam::mouseDoubleClickEvent(QMouseEvent* event)
     if (m_bEnableDblClk
         && (!currentRoom || currentRoom->GetConnectionStatus() != CX_CONNECTING)
         && (m_bullDisabled || event->position().y() < height() - m_bullSide)) {
-        // Original: theApp.DoOptionsDialog(TRUE, IDD_CHARACTERPAGE).
-        // The property-page dispatcher is not ported yet, so this branch stays
-        // intentionally empty rather than opening a non-original substitute.
+        theApp.DoOptionsDialog(TRUE, IDD_CHARACTERPAGE);
         return;
     }
     QWidget::mouseDoubleClickEvent(event);
@@ -360,7 +371,31 @@ void CBodyCam::mouseReleaseEvent(QMouseEvent*)
 
 void CBodyCam::keyPressEvent(QKeyEvent* event)
 {
+    if (event->key() == Qt::Key_Tab || event->key() == Qt::Key_Backtab) {
+        if (m_forcedDelete) {
+            if (!m_bGainedFocusImplicitly) {
+                CChatDoc* document = GetChatDoc();
+                if (document) {
+                    const BOOL backward = event->key() == Qt::Key_Backtab
+                        || event->modifiers().testFlag(Qt::ShiftModifier);
+                    document->CycleFocus(CHATFOCUS_EMOTIONWND, backward);
+                }
+            }
+            event->accept();
+        } else {
+            QWidget::keyPressEvent(event);
+        }
+        return;
+    }
+
+    if (!event->text().isEmpty()) {
+        ForwardToSayWnd(event->text().front().unicode());
+        event->accept();
+        return;
+    }
+
     if (m_mouseDown || m_bullDisabled) {
+        event->accept();
         return;
     }
     const int key = event->key();
@@ -442,6 +477,10 @@ void CBodyCam::keyPressEvent(QKeyEvent* event)
 
 void CBodyCam::contextMenuEvent(QContextMenuEvent* event)
 {
+    if (!m_forcedDelete) {
+        event->ignore();
+        return;
+    }
     QMenu menu(this);
     QAction* freeze = menu.addAction(
         originalMenuItemText(QStringLiteral("ID_BODYCONTEXT_FREEZE")));
@@ -449,13 +488,28 @@ void CBodyCam::contextMenuEvent(QContextMenuEvent* event)
     freeze->setChecked(m_avatar && m_avatar->m_freeze == AF_FROZEN);
     QAction* sendExpression = menu.addAction(
         originalMenuItemText(QStringLiteral("ID_BODYCONTEXT_SENDEXPRESSION")));
-    QAction* selected = menu.exec(event->globalPos());
-    if (selected == freeze && m_avatar) {
-        m_avatar->m_freeze = m_avatar->m_freeze == AF_FROZEN
-            ? AF_UNFROZEN : AF_FROZEN;
+    const QPoint popupPoint = event->reason() == QContextMenuEvent::Keyboard
+        ? mapToGlobal(rect().center()) : event->globalPos();
+    QAction* selected = menu.exec(popupPoint);
+    if (selected == freeze) {
+        OnBodycontextFreeze();
     } else if (selected == sendExpression) {
-        bChatSendText(QStringLiteral("<Chr>"), BM_SAY);
+        OnBodycontextSendexpression();
     }
+    event->accept();
+}
+
+void CBodyCam::OnBodycontextFreeze()
+{
+    if (!m_avatar) return;
+    m_avatar->m_freeze = m_avatar->m_freeze == AF_FROZEN
+        ? AF_UNFROZEN : AF_FROZEN;
+}
+
+void CBodyCam::OnBodycontextSendexpression()
+{
+    if (!bLegalToSend()) return;
+    bChatSendText(QStringLiteral("<Chr>"), BM_SAY);
 }
 
 void CBodyCam::resizeEvent(QResizeEvent* event)
@@ -655,6 +709,16 @@ CBodyCam* GetBodyCam()
     return document ? document->m_bodyCam : nullptr;
 }
 
+CBodyCam* GetCharSelBodyCam()
+{
+    return characterSelectionBodyCam;
+}
+
+void SetCharSelBodyCam(CBodyCam* bodyCam)
+{
+    characterSelectionBodyCam = bodyCam;
+}
+
 void UpdateEmotion(CEmotion& emotion)
 {
     if (CBodyCam* bodyCam = GetBodyCam()) {
@@ -682,4 +746,12 @@ void DetachBodyCamAvatar()
         bodyCam->m_avatar = nullptr;
         bodyCam->update();
     }
+}
+
+BOOL RefreshBodyPreview(CAvatarX* avatar)
+{
+    CBodyCam* bodyCam = GetCharSelBodyCam();
+    if (!bodyCam || bodyCam->m_avatar != avatar) return FALSE;
+    bodyCam->RefreshBody();
+    return TRUE;
 }
