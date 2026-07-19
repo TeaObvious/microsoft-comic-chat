@@ -62,6 +62,7 @@ public:
     bool m_bEmbedded = false;
     bool m_bPrompt = false;
     bool m_bIconMembers = true;
+    bool m_bDoTest = false;
     bool m_bAutoDownloadAvatars = false;
     bool m_bAutoDownloadBackdrops = true;
     bool m_bAllowFileTX = true;

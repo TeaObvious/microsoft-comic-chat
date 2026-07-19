@@ -407,6 +407,8 @@ QAction* CMainFrame::addToolCommand(CCoolToolBarEx* bar,
 
 void CMainFrame::appendMenuItems(QMenu* menu, const QList<OriginalMenuItem>& items)
 {
+    BOOL hasMemberProfile = FALSE;
+    BOOL hasMemberIdentity = FALSE;
     for (const OriginalMenuItem& item : items) {
         if (item.type == OriginalMenuItemType::Separator) {
             menu->addSeparator();
@@ -422,6 +424,13 @@ void CMainFrame::appendMenuItems(QMenu* menu, const QList<OriginalMenuItem>& ite
             }
         } else {
             QAction* action = addCommand(menu, item.text, item.commandIdentifier);
+            if (item.commandIdentifier
+                == QLatin1String("ID_MEMBER_GETINFO")) {
+                hasMemberProfile = TRUE;
+            } else if (item.commandIdentifier
+                       == QLatin1String("ID_GETIDENTITY")) {
+                hasMemberIdentity = TRUE;
+            }
             if (item.flags.contains(QStringLiteral("GRAYED"))
                 || item.flags.contains(QStringLiteral("INACTIVE"))) {
                 action->setEnabled(false);
@@ -431,6 +440,10 @@ void CMainFrame::appendMenuItems(QMenu* menu, const QList<OriginalMenuItem>& ite
                 action->setChecked(true);
             }
         }
+    }
+    if (hasMemberProfile && hasMemberIdentity
+        && !m_memberMenus.contains(menu)) {
+        m_memberMenus.append(menu);
     }
 }
 
@@ -594,6 +607,7 @@ bool CMainFrame::commandIsPorted(const QString& commandIdentifier) const
         QStringLiteral("ID_WINDOW_TILE_AUTO"),
         QStringLiteral("ID_MEMBER_GETINFO"),
         QStringLiteral("ID_MEMBER_IGNORE"),
+        QStringLiteral("ID_ADDTONOTIFICATIONS"),
         QStringLiteral("ID_GETIDENTITY"),
         QStringLiteral("ID_GET_VERSION"),
         QStringLiteral("ID_PING_USER"),
@@ -681,6 +695,12 @@ void CMainFrame::updateCommandUi()
                       ignoreSelectionState(m_doc, &allIgnored));
     setActionsChecked(m_commandActions, QStringLiteral("ID_MEMBER_IGNORE"),
                       allIgnored);
+    setActionsEnabled(m_commandActions,
+                      QStringLiteral("ID_ADDTONOTIFICATIONS"),
+                      m_doc && m_doc->GetSingleSelectedMember()
+                          && theApp.m_iAutoPage == -1
+                          && !m_doc->GetSingleSelectedMember()
+                                  ->GetFullName().isEmpty());
     const bool selectedInRoom = m_doc && status == CX_INCHANNEL
         && m_doc->SelectedMemberCount() > 0;
     setActionsEnabled(m_commandActions, QStringLiteral("ID_GETIDENTITY"),
@@ -755,6 +775,21 @@ void CMainFrame::updateCommandUi()
                       automationEnabled);
     setActionsEnabled(m_commandActions, QStringLiteral("ID_SETFONT"),
                       m_doc && !statusView);
+    for (QMenu* memberMenu : std::as_const(m_memberMenus)) {
+        if (!memberMenu) continue;
+        if (m_doc) {
+            m_doc->UpdateComicCharacterMenu(memberMenu);
+        } else {
+            for (QAction* action : memberMenu->actions()) {
+                if (action->data().toString()
+                    == QLatin1String("ID_MEMBER_GETCHAR")) {
+                    memberMenu->removeAction(action);
+                    delete action;
+                    break;
+                }
+            }
+        }
+    }
     for (INT macro = 0; macro < NMACROS; ++macro) {
         const QString command = QStringLiteral("ID_MACRO_A%1").arg(macro);
         setActionsEnabled(m_commandActions, command,
@@ -879,6 +914,13 @@ void CMainFrame::executeCommand(const QString& commandIdentifier)
     } else if (commandIdentifier == QLatin1String("ID_MEMBER_IGNORE")) {
         if (m_doc && ignoreSelectionState(m_doc, nullptr))
             m_doc->OnMemberIgnore();
+    } else if (commandIdentifier
+               == QLatin1String("ID_ADDTONOTIFICATIONS")) {
+        if (m_doc && m_doc->GetSingleSelectedMember()
+            && theApp.m_iAutoPage == -1
+            && !m_doc->GetSingleSelectedMember()->GetFullName().isEmpty()) {
+            m_doc->OnAddToNotifs();
+        }
     } else if (commandIdentifier == QLatin1String("ID_GETIDENTITY")) {
         if (m_doc && m_doc->GetConnectionStatus() == CX_INCHANNEL)
             m_doc->OnGetidentity();

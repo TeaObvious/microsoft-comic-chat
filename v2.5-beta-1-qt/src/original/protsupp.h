@@ -61,6 +61,8 @@ void OnInvite(const QString& sender, const QString& fullName,
 void AcknowledgeInvite(const QString& nickname, const QString& room);
 void ChatEmptyMemberList(CChatDoc* doc = nullptr);
 int AddToImageList(CUserInfo* pui);
+int FindMemberListIndex(CUserInfo* pui, CChatDoc* doc = nullptr);
+int RemoveMemberFromList(CUserInfo* pui);
 void AddToMembersList(CUserInfo* pui, CChatDoc* doc = nullptr);
 void CIUserPart(const QString& nickname, CChatDoc* doc = nullptr);
 void ProcessNick(CChatDoc* doc, const QString& oldNick, const QString& newNick,

@@ -634,7 +634,10 @@ void CChatDoc::UpdateComicCharacterMenu(QMenu* menu)
                 QLatin1Char('\n'), 0, 0));
         menu->insertAction(insertBefore, characterAction);
         QObject::connect(characterAction, &QAction::triggered, menu,
-                         [this] { OnGetComicCharacter(); });
+                         [] {
+                             if (CChatDoc* document = GetChatDoc())
+                                 document->OnGetComicCharacter();
+                         });
     }
 
     BOOL enabled = FALSE;

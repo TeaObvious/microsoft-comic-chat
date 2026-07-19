@@ -18,6 +18,7 @@
 #include <QListWidget>
 #include <QMenu>
 #include <QMessageBox>
+#include <QPalette>
 #include <QPainter>
 #include <QPixmap>
 #include <QSet>
@@ -51,6 +52,19 @@ int GetStatusImage(CUserInfo* pui)
     return 0;
 }
 
+QString SortName(CUserInfo* pui)
+{
+    if (!pui) return {};
+    QString name = pui->GetScreenName();
+    if (name.startsWith(QLatin1Char('"'))) {
+        // CompareStringsWithoutQuotes removes the first and last characters
+        // after asserting that a source nickname beginning with a quote also
+        // ends with one.
+        name = name.size() > 1 ? name.mid(1, name.size() - 2) : QString();
+    }
+    return name;
+}
+
 QIcon GetMemberIcon(CUserInfo* pui, bool iconMode)
 {
     if (!pui) return {};
@@ -82,7 +96,17 @@ QIcon GetMemberIcon(CUserInfo* pui, bool iconMode)
 void UpdateListItem(QListWidgetItem* item, CUserInfo* pui, bool iconMode)
 {
     if (!item || !pui) return;
-    item->setText(pui->GetScreenName());
+    QString displayName;
+    if (theApp.m_bDoTest) pui->GetAttedNick(displayName);
+    else displayName = pui->GetScreenName();
+    const int statusImage = GetStatusImage(pui);
+    const int avatarImage = iconMode ? AddToImageList(pui) : -1;
+    item->setText(displayName);
+    item->setData(CMemberList::StatusImageRole, statusImage);
+    item->setData(CMemberList::StateImageRole,
+                  iconMode ? statusImage + 1 : 0);
+    item->setData(CMemberList::AvatarImageRole, avatarImage);
+    item->setData(CMemberList::IconModeRole, iconMode);
     item->setIcon(GetMemberIcon(pui, iconMode));
 }
 
@@ -324,23 +348,53 @@ void LoadMemberMenu(QMenu& menu, const QString& resource,
 }
 }
 
+CMemberListCtrl::CMemberListCtrl(CMemberList* owner)
+    : QListWidget(owner)
+    , m_owner(owner)
+{
+}
+
+void CMemberListCtrl::keyPressEvent(QKeyEvent* event)
+{
+    if (!event) return;
+    CChatDoc* document = DocumentForMemberList(m_owner);
+    if (event->key() == Qt::Key_Tab || event->key() == Qt::Key_Backtab) {
+        if (document) {
+            const BOOL backward = event->key() == Qt::Key_Backtab
+                || event->modifiers().testFlag(Qt::ShiftModifier);
+            document->CycleFocus(CHATFOCUS_MEMBERLIST, backward);
+        }
+        event->accept();
+        return;
+    }
+
+    if (!event->text().isEmpty() && document && document->m_sayWnd) {
+        document->SetFocusToSayWnd();
+        QWidget* target = QApplication::focusWidget();
+        if (target && target != this) {
+            QKeyEvent forwarded(QEvent::KeyPress, event->key(),
+                                event->modifiers(), event->text(),
+                                event->isAutoRepeat(), event->count());
+            QApplication::sendEvent(target, &forwarded);
+        }
+        event->accept();
+        return;
+    }
+
+    QListWidget::keyPressEvent(event);
+}
+
 void AddMacroMenu(QMenu& contextMenu)
 {
     CChatDoc* document = GetChatDoc();
     if (!document) return;
 
-    QMenu* macroMenu = nullptr;
-    QList<QMenu*> pending{&contextMenu};
-    while (!pending.isEmpty() && !macroMenu) {
-        QMenu* candidate = pending.takeFirst();
-        for (QAction* action : candidate->actions()) {
-            if (action->menu()) pending.append(action->menu());
-            if (action->data().toString() == QLatin1String("IDD_BAN")) {
-                macroMenu = candidate;
-                break;
-            }
-        }
-    }
+    const INT macroPosition = bCanViewUnrated() && document->m_bComicView
+        ? MACROSUBMENUCOMIC : MACROSUBMENUTEXT;
+    const QList<QAction*> contextActions = contextMenu.actions();
+    QMenu* macroMenu = macroPosition >= 0
+            && macroPosition < contextActions.size()
+        ? contextActions.at(macroPosition)->menu() : nullptr;
     if (!macroMenu) return;
 
     macroMenu->clear();
@@ -380,18 +434,27 @@ void ShowMemberContext(int x, int y)
 
 CMemberList::CMemberList(QWidget* parent)
     : QWidget(parent)
-    , m_list(new QListWidget(this))
+    , m_MemberListBox(new CMemberListCtrl(this))
+    , m_list(m_MemberListBox)
 {
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(m_list);
     m_list->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    m_list->setMovement(QListView::Static);
+    m_list->setResizeMode(QListView::Adjust);
+    m_list->setWrapping(true);
+    m_list->setWordWrap(false);
+    QPalette listPalette = m_list->palette();
+    listPalette.setColor(QPalette::Base, QColor(255, 255, 255));
+    listPalette.setColor(QPalette::Text, QColor(0, 0, 0));
+    m_list->setPalette(listPalette);
     m_list->viewport()->installEventFilter(this);
     connect(m_list, &QListWidget::itemDoubleClicked, this,
-            [this](QListWidgetItem* item) {
+            [this](QListWidgetItem*) {
         CChatDoc* document = DocumentForMemberList(this);
-        auto* pui = item ? static_cast<CUserInfo*>(
-            item->data(Qt::UserRole).value<void*>()) : nullptr;
+        CUserInfo* pui = document
+            ? document->GetSingleSelectedMember() : nullptr;
         if (!document || !document->m_proto || !pui) return;
         if (pui->IsComicUser()) {
             document->m_proto->ChatGetInfo(pui);
@@ -417,7 +480,8 @@ void CMemberList::AddUser(CUserInfo* pui)
         }
     }
     auto* item = new QListWidgetItem(pui->GetScreenName());
-    item->setData(Qt::UserRole, QVariant::fromValue(static_cast<void*>(pui)));
+    item->setData(UserPointerRole,
+                  QVariant::fromValue(static_cast<void*>(pui)));
     UpdateListItem(item, pui, m_iconMode);
     m_list->addItem(item);
     Sort();
@@ -462,7 +526,7 @@ void CMemberList::Sort()
         if (sa != sb) {
             return sa < sb;
         }
-        return pa->GetScreenName().compare(pb->GetScreenName(), Qt::CaseInsensitive) < 0;
+        return SortName(pa).compare(SortName(pb), Qt::CaseInsensitive) < 0;
     });
     for (QListWidgetItem* item : items) {
         auto* pui = static_cast<CUserInfo*>(item->data(Qt::UserRole).value<void*>());
@@ -630,8 +694,19 @@ void GetSelectedPuis(QList<CUserInfo*>& selections)
 {
     selections.clear();
     CChatDoc* document = GetChatDoc();
-    if (document && document->m_memberList) {
-        selections = document->m_memberList->selectedUsers();
+    if (!document || !document->m_memberList) return;
+    auto* memberList = qobject_cast<QListWidget*>(
+        document->m_memberList->FocusWidget());
+    if (!memberList) return;
+
+    INT items = 0;
+    for (INT index = 0; index < memberList->count(); ++index) {
+        QListWidgetItem* item = memberList->item(index);
+        if (!item || !item->isSelected()) continue;
+        auto* pui = item ? static_cast<CUserInfo*>(
+            item->data(CMemberList::UserPointerRole).value<void*>()) : nullptr;
+        if (pui && pui != g_puiSelf) selections.append(pui);
+        if (!(items++ < 10)) break;
     }
 }
 
@@ -639,7 +714,6 @@ void UpdateSpectators(CChatDoc* doc, BOOL moderated)
 {
     if (!doc || !doc->m_memberList || !doc->m_memberList->m_list) return;
     QListWidget* members = doc->m_memberList->m_list;
-    QList<CUserInfo*> changed;
     for (int index = 0; index < members->count(); ++index) {
         QListWidgetItem* item = members->item(index);
         auto* pui = static_cast<CUserInfo*>(
@@ -648,7 +722,7 @@ void UpdateSpectators(CChatDoc* doc, BOOL moderated)
         pui->SetFlag(UF_SPECTATOR,
                      !pui->IsOperator() && moderated
                          && !pui->CheckFlag(UF_HASVOICE));
-        changed.append(pui);
+        UpdateListItem(item, pui, doc->m_memberList->m_iconMode);
     }
-    for (CUserInfo* pui : changed) doc->m_memberList->AddUser(pui);
+    members->viewport()->update();
 }

@@ -7,14 +7,20 @@
 #include "memblst.h"
 #include "originalassets.h"
 #include "protsupp.h"
+#include "saywnd.h"
 #include "setupdlg.h"
 #include "userinfo.h"
 
 #include <QApplication>
+#include <QImage>
+#include <QKeyEvent>
 #include <QListWidget>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
+#include <vector>
 
 namespace {
 [[noreturn]] void fail(int line)
@@ -73,6 +79,7 @@ int main(int argc, char** argv)
     protocol.m_doc = &document;
     protocol.m_strChannel = channel;
     protocol.SetConnectionStatus(CX_INCHANNEL);
+    document.LoadDocData();
 
     CMemberList memberList;
     document.m_memberList = &memberList;
@@ -97,6 +104,27 @@ int main(int argc, char** argv)
     otherItem->setSelected(true);
     REQUIRE(document.SelectedMemberCount() == 1);
     REQUIRE(document.GetSingleSelectedMember() == &other);
+
+    CSayWnd::SetDefaultButtons(0);
+    CSayWnd sayWindow;
+    document.m_sayWnd = &sayWindow;
+    memberList.show();
+    sayWindow.show();
+    application.processEvents();
+    const QString sourceCharacter = originalResourceString(
+        QStringLiteral("IDS_DEFAULT_NICK")).left(1);
+    REQUIRE(!sourceCharacter.isEmpty());
+    sayWindow.GetSayEdit()->clear();
+    list->setFocus();
+    QKeyEvent memberCharacter(QEvent::KeyPress, 0, Qt::NoModifier,
+                              sourceCharacter);
+    QApplication::sendEvent(list, &memberCharacter);
+    REQUIRE(sayWindow.GetSayEdit()->toPlainText() == sourceCharacter);
+    list->setFocus();
+    QKeyEvent memberBackTab(QEvent::KeyPress, Qt::Key_Backtab,
+                            Qt::ShiftModifier);
+    QApplication::sendEvent(list, &memberBackTab);
+    REQUIRE(QApplication::focusWidget() == sayWindow.GetSayEdit());
 
     document.OnMemberGetinfo();
     REQUIRE(protocol.sent.takeLast()
@@ -162,6 +190,188 @@ int main(int argc, char** argv)
     REQUIRE(!other.Ignored());
     REQUIRE(!IsIgnored(identity));
 
+    // OnDblClick obtains the source's single selected member instead of
+    // acting on the signal's clicked item while a multiple selection exists.
+    protocol.sent.clear();
+    QListWidgetItem* selfItem = itemForUser(list, &self);
+    REQUIRE(selfItem != nullptr);
+    selfItem->setSelected(true);
+    list->itemDoubleClicked(otherItem);
+    REQUIRE(protocol.sent.isEmpty());
+    list->clearSelection();
+    list->setCurrentItem(otherItem);
+    otherItem->setSelected(true);
+    list->itemDoubleClicked(otherItem);
+    REQUIRE(protocol.sent.takeLast()
+            == QStringLiteral("PRIVMSG %1 :# GetInfo\r\n").arg(otherNick));
+
+    const QStringList avatarNames = GetAllAvatarNames();
+    REQUIRE(avatarNames.size() >= 14);
+    std::vector<std::unique_ptr<CUserInfo>> sourceUsers;
+    sourceUsers.reserve(14);
+    for (INT index = 0; index < 12; ++index) {
+        const QString& avatarName = avatarNames.at(index);
+        auto user = std::make_unique<CUserInfo>(
+            avatarName, avatarName + QLatin1Char('@') + server);
+        user->ComicUser(true);
+        CAvatarX* avatar = GetAvatar3(avatarName, user.get(), FALSE);
+        REQUIRE(avatar != nullptr);
+        SetUserAvatarID(user.get(), avatar->m_avatarID);
+        document.m_allChannelPuis.append(user.get());
+        memberList.AddUser(user.get());
+        sourceUsers.push_back(std::move(user));
+    }
+
+    sourceUsers[1]->SetOperator(true);
+    sourceUsers[2]->SetFlag(UF_SPECTATOR, true);
+    sourceUsers[3]->SetOperator(true);
+    sourceUsers[3]->SetFlag(UF_AWAY, true);
+    sourceUsers[3]->Ignore(true);
+    sourceUsers[4]->SetOperator(true);
+    sourceUsers[4]->SetFlag(UF_AWAY, true);
+    for (INT index = 0; index < 5; ++index)
+        memberList.AddUser(sourceUsers[index].get());
+
+    document.OnViewListAux();
+    const int sourceStatusImages[] = {0, 1, 2, 3, 4};
+    for (INT index = 0; index < 5; ++index) {
+        QListWidgetItem* item = itemForUser(list, sourceUsers[index].get());
+        REQUIRE(item != nullptr);
+        REQUIRE(item->data(CMemberList::StatusImageRole).toInt()
+                == sourceStatusImages[index]);
+        REQUIRE(item->data(CMemberList::StateImageRole).toInt() == 0);
+        REQUIRE(item->icon().pixmap(16, 16).toImage()
+                == theApp.m_StatusIcons.at(sourceStatusImages[index])
+                       .pixmap(16, 16).toImage());
+    }
+
+    theApp.m_bDoTest = true;
+    memberList.Sort();
+    REQUIRE(itemForUser(list, sourceUsers[1].get())->text()
+            == QLatin1Char('@') + sourceUsers[1]->GetScreenName());
+    REQUIRE(itemForUser(list, sourceUsers[2].get())->text()
+            == QLatin1Char('>') + sourceUsers[2]->GetScreenName());
+    theApp.m_bDoTest = false;
+    memberList.Sort();
+
+    document.m_bComicView = true;
+    document.OnViewIcon();
+    REQUIRE(list->iconSize() == QSize(58, 40));
+    for (INT index = 0; index < 5; ++index) {
+        QListWidgetItem* item = itemForUser(list, sourceUsers[index].get());
+        REQUIRE(item != nullptr);
+        REQUIRE(item->data(CMemberList::StateImageRole).toInt()
+                == sourceStatusImages[index] + 1);
+        REQUIRE(item->data(CMemberList::AvatarImageRole).toInt() >= 0);
+        REQUIRE(!item->icon().isNull());
+    }
+
+    QListWidgetItem* normalItem = itemForUser(list, sourceUsers[0].get());
+    REQUIRE(normalItem != nullptr);
+    list->clearSelection();
+    normalItem->setSelected(true);
+    list->setCurrentItem(normalItem, QItemSelectionModel::NoUpdate);
+    UpdateSpectators(&document, TRUE);
+    REQUIRE(sourceUsers[0]->IsSpectator());
+    REQUIRE(normalItem->data(CMemberList::StatusImageRole).toInt() == 2);
+    REQUIRE(normalItem->isSelected());
+    UpdateSpectators(&document, FALSE);
+    REQUIRE(!sourceUsers[0]->IsSpectator());
+    REQUIRE(normalItem->data(CMemberList::StatusImageRole).toInt() == 0);
+    REQUIRE(normalItem->isSelected());
+    sourceUsers[2]->SetFlag(UF_SPECTATOR, true);
+    memberList.AddUser(sourceUsers[2].get());
+
+    QStringList sortedAvatarNames = avatarNames;
+    std::sort(sortedAvatarNames.begin(), sortedAvatarNames.end(),
+              [](const QString& left, const QString& right) {
+                  return left.compare(right, Qt::CaseInsensitive) < 0;
+    });
+    auto quotedUser = std::make_unique<CUserInfo>(
+        QString(QLatin1Char('"')) + sortedAvatarNames.last()
+            + QLatin1Char('"'),
+        sortedAvatarNames.last() + QLatin1Char('@') + server);
+    CAvatarX* quotedAvatar = GetAvatar3(sortedAvatarNames.last(),
+                                        quotedUser.get(), FALSE);
+    REQUIRE(quotedAvatar != nullptr);
+    SetUserAvatarID(quotedUser.get(), quotedAvatar->m_avatarID);
+    auto lowUser = std::make_unique<CUserInfo>(
+        sortedAvatarNames.first(),
+        sortedAvatarNames.first() + QLatin1Char('@') + server);
+    CAvatarX* lowAvatar = GetAvatar3(sortedAvatarNames.first(),
+                                     lowUser.get(), FALSE);
+    REQUIRE(lowAvatar != nullptr);
+    SetUserAvatarID(lowUser.get(), lowAvatar->m_avatarID);
+    CUserInfo* quotedPtr = quotedUser.get();
+    CUserInfo* lowPtr = lowUser.get();
+    sourceUsers.push_back(std::move(quotedUser));
+    sourceUsers.push_back(std::move(lowUser));
+    document.m_allChannelPuis.append(quotedPtr);
+    document.m_allChannelPuis.append(lowPtr);
+    memberList.AddUser(quotedPtr);
+    memberList.AddUser(lowPtr);
+    REQUIRE(FindMemberListIndex(lowPtr, &document)
+            < FindMemberListIndex(quotedPtr, &document));
+    REQUIRE(FindMemberListIndex(sourceUsers[1].get(), &document)
+            < FindMemberListIndex(sourceUsers[0].get(), &document));
+    REQUIRE(FindMemberListIndex(sourceUsers[0].get(), &document)
+            < FindMemberListIndex(sourceUsers[2].get(), &document));
+
+    list->clearSelection();
+    for (INT index = 0; index < 12; ++index) {
+        QListWidgetItem* item = itemForUser(list, sourceUsers[index].get());
+        REQUIRE(item != nullptr);
+        item->setSelected(true);
+    }
+    QList<CUserInfo*> whisperSelections;
+    GetSelectedPuis(whisperSelections);
+    REQUIRE(whisperSelections.size() == 11);
+    MListTalkTosToPuiself(&self);
+    REQUIRE(self.m_udi.m_talkTos.size() == 12);
+
+    self.SelectInMemberList(&self, TRUE, FALSE);
+    REQUIRE(document.SelectedMemberCount() == 1);
+    REQUIRE(document.GetSingleSelectedMember() == &self);
+    other.SelectInMemberList(&other, TRUE, TRUE);
+    REQUIRE(document.SelectedMemberCount() == 2);
+    REQUIRE(memberList.currentUser() == &other);
+    other.SelectInMemberList(&other, FALSE, FALSE);
+    REQUIRE(document.SelectedMemberCount() == 0);
+
+    theApp.m_bShowIdentity = true;
+    REQUIRE(other.GetQualifiedName()
+            == QStringLiteral("%1 (%2)").arg(otherNick, identity));
+    theApp.m_bShowIdentity = false;
+    REQUIRE(other.GetQualifiedName() == otherNick);
+    theApp.m_bShowIdentity = true;
+
+    list->clearSelection();
+    otherItem->setSelected(true);
+    list->setCurrentItem(otherItem);
+    self.SetOperator(true);
+    protocol.m_dwModes = CM_MODERATED;
+    document.OnMakeadmin();
+    REQUIRE(protocol.sent.takeLast()
+            == QStringLiteral("MODE %1 +o %2\r\n").arg(channel, otherNick));
+    other.SetOperator(true);
+    document.OnMakespeaker();
+    REQUIRE(protocol.sent.takeFirst()
+            == QStringLiteral("MODE %1 -o %2\r\n").arg(channel, otherNick));
+    REQUIRE(protocol.sent.takeFirst()
+            == QStringLiteral("MODE %1 +v %2\r\n").arg(channel, otherNick));
+    document.OnMakespectator();
+    REQUIRE(protocol.sent.takeFirst()
+            == QStringLiteral("MODE %1 -o %2\r\n").arg(channel, otherNick));
+    REQUIRE(protocol.sent.takeFirst()
+            == QStringLiteral("MODE %1 -v %2\r\n").arg(channel, otherNick));
+    self.SetOperator(false);
+    other.SetOperator(false);
+
+    theApp.m_iAutoPage = -1;
+    document.OnAddToNotifs();
+    REQUIRE(theApp.m_iAutoPage == 1);
+    theApp.m_iAutoPage = -1;
+
     const QList<OriginalMenuItem> memberMenu = originalMenuResource(
         QStringLiteral("IDR_IRC_MEMBER"));
     REQUIRE(memberMenu.size() == 1);
@@ -172,6 +382,7 @@ int main(int argc, char** argv)
             == originalMenuItemText(QStringLiteral("ID_MEMBER_GETINFO")));
 
     document.m_memberList = nullptr;
+    document.m_sayWnd = nullptr;
     document.m_puiSelf = nullptr;
     document.m_mapNickToPtr.clear();
     document.m_allChannelPuis.clear();

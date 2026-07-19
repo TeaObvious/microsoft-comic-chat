@@ -100,7 +100,10 @@ QString& CUserInfo::GetScreenName()
 
 const QString CUserInfo::GetQualifiedName() const
 {
-    return m_fullName.isEmpty() ? m_strName : QStringLiteral("%1 (%2)").arg(m_strName, m_fullName);
+    const QString nick = (m_flags & UF_SCREENNAME)
+        ? m_strScreenName : m_strName;
+    return theApp.m_bShowIdentity && !m_fullName.isEmpty()
+        ? QStringLiteral("%1 (%2)").arg(nick, m_fullName) : nick;
 }
 
 void CUserInfo::SetName(const QString& nick)
@@ -220,17 +223,15 @@ void CUserInfo::SelectInMemberList(CUserInfo* addressee, BOOL select,
         members->m_list->setCurrentItem(nullptr);
     }
     if (!addressee) return;
-    for (int index = 0; index < members->m_list->count(); ++index) {
-        QListWidgetItem* item = members->m_list->item(index);
-        if (!item || item->data(Qt::UserRole).value<void*>() != addressee)
-            continue;
-        item->setSelected(select);
-        if (select) members->m_list->setCurrentItem(
-            item, QItemSelectionModel::NoUpdate);
-        else if (members->m_list->currentItem() == item)
-            members->m_list->setCurrentItem(nullptr);
-        return;
-    }
+    const INT index = FindMemberListIndex(addressee, document);
+    if (index < 0) return;
+    QListWidgetItem* item = members->m_list->item(index);
+    if (!item) return;
+    item->setSelected(select);
+    if (select) members->m_list->setCurrentItem(
+        item, QItemSelectionModel::NoUpdate);
+    else if (members->m_list->currentItem() == item)
+        members->m_list->setCurrentItem(nullptr);
 }
 
 void MListTalkTosToPuiself(CUserInfo* puiSelf)

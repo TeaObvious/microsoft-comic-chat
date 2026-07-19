@@ -234,8 +234,13 @@ int main(int argc, char** argv)
             QStringLiteral("IDS_DEFAULT_NICK"));
         theApp.m_macros[0].m_strValue = originalResourceString(
             QStringLiteral("IDS_DEFAULT_CHANNEL"));
+        theApp.m_iAutoPage = -1;
+        other->ComicUser(true);
         other->SetAvatarRealInfo(otherAvatarName, originalResourceString(
             QStringLiteral("IDS_URL_MSPREFIX")));
+        other->SetFullName(otherAvatarName + QLatin1Char('@')
+                           + originalResourceString(
+                               QStringLiteral("IDS_DEFAULT_SERVER")));
 
         sendRightMousePress(view, avatarPoint);
         inspectContextPopup(application, [&] {
@@ -264,11 +269,35 @@ int main(int argc, char** argv)
             REQUIRE(getCharacter->text() == originalResourceString(
                 QStringLiteral("IDS_GET_CHARACTER")));
             REQUIRE(getCharacter->isEnabled());
+            const QStringList enabledCommands = {
+                QStringLiteral("ID_MEMBER_GETINFO"),
+                QStringLiteral("ID_GETIDENTITY"),
+                QStringLiteral("ID_WHISPERBOX_MLIST"),
+                QStringLiteral("ID_ADDTONOTIFICATIONS"),
+                QStringLiteral("ID_MEMBER_IGNORE"),
+                QStringLiteral("ID_SEND_EMAIL"),
+                QStringLiteral("ID_VISIT_HOMEPAGE"),
+                QStringLiteral("ID_GET_VERSION"),
+                QStringLiteral("ID_PING_USER"),
+                QStringLiteral("ID_GET_LOCALTIME")
+            };
+            for (const QString& command : enabledCommands) {
+                QAction* action = findCommand(menu, command);
+                REQUIRE(action != nullptr);
+                REQUIRE(action->isEnabled());
+            }
+            REQUIRE(!findCommand(menu, QStringLiteral("ID_MEMBER_IGNORE"))
+                         ->isChecked());
             QAction* defineMacro = findCommand(
                 menu, QStringLiteral("ID_DEFINE_MACRO"));
             QAction* macro = findCommand(menu, QStringLiteral("ID_MACRO_A0"));
             REQUIRE(defineMacro != nullptr);
             REQUIRE(macro != nullptr);
+            REQUIRE(menu->actions().size() > MACROSUBMENUCOMIC);
+            REQUIRE(menu->actions().at(MACROSUBMENUCOMIC)->menu() != nullptr);
+            REQUIRE(findCommand(
+                menu->actions().at(MACROSUBMENUCOMIC)->menu(),
+                QStringLiteral("ID_DEFINE_MACRO")) == defineMacro);
             REQUIRE(macro->text() == QStringLiteral("%1\tAlt+0").arg(
                 originalResourceString(QStringLiteral("IDS_DEFAULT_NICK"))));
             REQUIRE(!findCommand(menu, QStringLiteral("ID_SEND_FILE"))
@@ -305,16 +334,81 @@ int main(int argc, char** argv)
         });
         REQUIRE(mousedPui == other);
 
+        mousedPui = nullptr;
+        inspectContextPopup(application, [&] {
+            sendContextMenu(memberWidget->viewport(),
+                            QContextMenuEvent::Keyboard, QPoint(-1, -1));
+        }, [&](QMenu* menu) {
+            REQUIRE(findCommand(menu, QStringLiteral("ID_MEMBER_GETINFO"))
+                    != nullptr);
+        });
+        REQUIRE(mousedPui == other);
+
+        document.m_bComicView = false;
+        other->Ignore(true);
+        inspectContextPopup(application, [&] {
+            sendContextMenu(memberWidget->viewport(),
+                            QContextMenuEvent::Mouse, memberPoint);
+        }, [&](QMenu* menu) {
+            REQUIRE(findCommand(menu, QStringLiteral("ID_MEMBER_GETCHAR"))
+                    == nullptr);
+            REQUIRE(menu->actions().size() > MACROSUBMENUTEXT);
+            QMenu* macroMenu = menu->actions().at(MACROSUBMENUTEXT)->menu();
+            REQUIRE(macroMenu != nullptr);
+            REQUIRE(findCommand(macroMenu, QStringLiteral("ID_DEFINE_MACRO"))
+                    != nullptr);
+            QAction* ignore = findCommand(
+                menu, QStringLiteral("ID_MEMBER_IGNORE"));
+            REQUIRE(ignore != nullptr && ignore->isEnabled()
+                    && ignore->isChecked());
+        });
+        other->Ignore(false);
+        document.m_bComicView = true;
+
         g_puiSelf->SetOperator(true);
+        document.m_proto->m_dwModes &= ~DWORD(CM_MODERATED);
         inspectContextPopup(application, [&] {
             sendContextMenu(view->viewport(), QContextMenuEvent::Mouse,
                             avatarPoint);
         }, [&](QMenu* menu) {
-            REQUIRE(findCommand(menu,
-                QStringLiteral("ID_ADMINISTRATOR_KICK")) != nullptr);
-            REQUIRE(findCommand(menu, QStringLiteral("ID_MAKEADMIN"))
-                    != nullptr);
+            QAction* kick = findCommand(
+                menu, QStringLiteral("ID_ADMINISTRATOR_KICK"));
+            QAction* ban = findCommand(menu, QStringLiteral("ID_ADMIN_BAN"));
+            QAction* hostAction = findCommand(
+                menu, QStringLiteral("ID_MAKEADMIN"));
+            QAction* speakerAction = findCommand(
+                menu, QStringLiteral("ID_MAKESPEAKER"));
+            QAction* spectatorAction = findCommand(
+                menu, QStringLiteral("ID_MAKESPECTATOR"));
+            REQUIRE(kick != nullptr && kick->isEnabled());
+            REQUIRE(ban != nullptr && ban->isEnabled());
+            REQUIRE(hostAction != nullptr && hostAction->isEnabled()
+                    && !hostAction->isChecked());
+            REQUIRE(speakerAction != nullptr && speakerAction->isEnabled()
+                    && speakerAction->isChecked());
+            REQUIRE(spectatorAction != nullptr
+                    && !spectatorAction->isEnabled()
+                    && !spectatorAction->isChecked());
         });
+
+        document.m_proto->m_dwModes |= CM_MODERATED;
+        other->SetFlag(UF_SPECTATOR, true);
+        inspectContextPopup(application, [&] {
+            sendContextMenu(view->viewport(), QContextMenuEvent::Mouse,
+                            avatarPoint);
+        }, [&](QMenu* menu) {
+            QAction* speakerAction = findCommand(
+                menu, QStringLiteral("ID_MAKESPEAKER"));
+            QAction* spectatorAction = findCommand(
+                menu, QStringLiteral("ID_MAKESPECTATOR"));
+            REQUIRE(speakerAction != nullptr && speakerAction->isEnabled()
+                    && !speakerAction->isChecked());
+            REQUIRE(spectatorAction != nullptr
+                    && spectatorAction->isEnabled()
+                    && spectatorAction->isChecked());
+        });
+        other->SetFlag(UF_SPECTATOR, false);
+        document.m_proto->m_dwModes &= ~DWORD(CM_MODERATED);
         g_puiSelf->SetOperator(false);
 
         inspectContextPopup(application, [&] {
@@ -367,6 +461,13 @@ int main(int argc, char** argv)
         g_puiSelf->SelectInMemberList(g_puiSelf, TRUE, FALSE);
         sendMousePress(view, avatarPoint, Qt::ShiftModifier);
         REQUIRE(members->SelectedMemberCount() == 2);
+        sendContextMenu(memberWidget->viewport(),
+                        QContextMenuEvent::Keyboard, QPoint(-1, -1));
+        application.processEvents();
+        for (QWidget* widget : QApplication::topLevelWidgets()) {
+            auto* menu = qobject_cast<QMenu*>(widget);
+            REQUIRE(!menu || !menu->isVisible());
+        }
         members->MakeVisible(other);
 
         say->GetSayEdit()->clear();

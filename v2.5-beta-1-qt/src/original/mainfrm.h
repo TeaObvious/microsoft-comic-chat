@@ -76,6 +76,7 @@ private:
     QLabel* m_status1 = nullptr;
     QHash<QString, QList<QAction*>> m_commandActions;
     QList<QMenu*> m_macroMenus;
+    QList<QMenu*> m_memberMenus;
     QHash<CChatDoc*, CChildFrame*> m_childFrames;
     int m_nextUntitled = 1;
     bool m_destroying = false;

@@ -2343,6 +2343,33 @@ int AddToImageList(CUserInfo* pui)
     return original->m_iconIndex;
 }
 
+int FindMemberListIndex(CUserInfo* pui, CChatDoc* doc)
+{
+    if (!pui) return -1;
+    if (!doc) doc = GetChatDoc();
+    CMemberListCtrl* members = doc && doc->m_memberList
+        ? doc->m_memberList->m_MemberListBox : nullptr;
+    if (!members) return -1;
+    for (INT index = 0; index < members->count(); ++index) {
+        QListWidgetItem* item = members->item(index);
+        if (item && item->data(CMemberList::UserPointerRole).value<void*>()
+                == pui) {
+            return index;
+        }
+    }
+    return -1;
+}
+
+int RemoveMemberFromList(CUserInfo* pui)
+{
+    CChatDoc* doc = GetChatDoc();
+    const INT index = FindMemberListIndex(pui, doc);
+    CMemberListCtrl* members = doc && doc->m_memberList
+        ? doc->m_memberList->m_MemberListBox : nullptr;
+    if (members && index >= 0) delete members->takeItem(index);
+    return index;
+}
+
 bool bSingleJoin(const QString& attedNick, void* pDoc, unsigned long)
 {
     auto* doc = static_cast<CChatDoc*>(pDoc);

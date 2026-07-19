@@ -5,16 +5,37 @@
 #include "wincompat.h"
 
 #include <QList>
+#include <QListWidget>
 #include <QWidget>
 
 class CChatDoc;
-class QListWidget;
+class CMemberList;
 class CUserInfo;
 class QEvent;
+class QKeyEvent;
 class QMenu;
+
+class CMemberListCtrl : public QListWidget {
+public:
+    explicit CMemberListCtrl(CMemberList* owner);
+
+protected:
+    void keyPressEvent(QKeyEvent* event) override;
+
+private:
+    CMemberList* m_owner = nullptr;
+};
 
 class CMemberList : public QWidget {
 public:
+    enum ItemDataRole {
+        UserPointerRole = Qt::UserRole,
+        StatusImageRole = Qt::UserRole + 1,
+        StateImageRole = Qt::UserRole + 2,
+        AvatarImageRole = Qt::UserRole + 3,
+        IconModeRole = Qt::UserRole + 4
+    };
+
     explicit CMemberList(QWidget* parent = nullptr);
 
     void AddUser(CUserInfo* pui);
@@ -31,6 +52,9 @@ public:
     void EnsureFocusItem();
     void MakeVisible(CUserInfo* pui);
 
+    // CListCtrl replacement kept under the original member name.
+    CMemberListCtrl* m_MemberListBox = nullptr;
+
 protected:
     void contextMenuEvent(QContextMenuEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -40,7 +64,7 @@ protected:
 private:
     friend class CUserInfo;
     friend void UpdateSpectators(CChatDoc* doc, BOOL moderated);
-    QListWidget* m_list = nullptr;
+    CMemberListCtrl* m_list = nullptr;
     bool m_iconMode = false;
 };
 

@@ -279,6 +279,7 @@ void CChatApp::InitVals()
     m_bAcceptNMCalls = true;
     m_bShowIdentity = true;
     m_bIconMembers = true;
+    m_bDoTest = false;
     m_bAutoDownloadAvatars = false;
     m_bAutoDownloadBackdrops = true;
     m_bSaveViewMode = true;

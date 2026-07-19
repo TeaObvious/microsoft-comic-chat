@@ -62,12 +62,14 @@ synchronized with the active work package and its verified handoff state:
 > integration are deferred and non-gating. Do not implement Qt substitutes for
 > those deferred facilities unless the user explicitly changes this scope.
 >
-> Next work package: proceed to fixed priority 2 and audit the remaining
-> source-defined Comic Chat annotation, avatar, emotion, balloon, panel, and
-> Starring boundaries. Begin with the original receive/send glue in
-> `protsupp.*`, `avatario.*`, `avatar.*`, and `bodycam.*`; add a test only
-> after the original call order and bytes are documented, and leave every
-> unsupported branch empty rather than inferring behavior.
+> Next work package: resume fixed priority 2 with the remaining non-deferred
+> Avatar/emotion/BodyCam boundary in phase 3. Re-audit `bodycam.*`, `avatar.*`,
+> `avatario.*`, `textpose.cpp`, their `proppage.*` callers, message maps, and
+> `chat.rc` resources before writing its work block. Close only the
+> source-defined character double-click, focus/tab cycle, property-page/error
+> coupling, and ArtDir/art-pack switching gaps. WinInet avatar/RealInfo
+> download mechanics remain deferred and must not receive a replacement
+> downloader, substitute character, or locally invented success path.
 > `IdentD` is explicitly deferred and non-gating; do not bind port 113 or count
 > it as required for core-port completion. After each accepted slice, update
 > this next-work-package paragraph and every affected status entry before
@@ -135,7 +137,7 @@ synchronized with the active work package and its verified handoff state:
   non-Far-East ACP branch in `ircsock.*`, `ircproto.*`, `query.*`, and the
   associated glue. Unsupported SSPI authentication modes and IdentD remain
   disabled, explicitly documented, deferred, and excluded from this gate.
-- [ ] Complete member-list icon/list modes, original status images,
+- [x] Complete member-list icon/list modes, original status images,
   context-command enablement, selection behavior, and all source-backed
   member actions.
 - [ ] Complete all menu, submenu, accelerator, toolbar, status-bar,
@@ -164,6 +166,121 @@ synchronized with the active work package and its verified handoff state:
   files, CTest still reports all 45 names independently, and each invocation
   starts a fresh process so Qt application and global Comic Chat state cannot
   leak between cases.
+
+### Completed work block: member-list parity
+
+Source contract:
+
+1. `memblst.cpp::CMemberList::OnCreateClient` creates one white,
+   always-visible, multiple-selection list control with auto-arranged large
+   icons, a single report column, the shared large avatar image list, and the
+   five unmodified 16-by-16 cells from `IDB_MEMBER` as its small status image
+   list. `CChatDoc::OnViewIcon` uses the large avatar image and attaches the
+   same status strip as a separate state-image list; `OnViewListAux` changes
+   to report mode and removes only that state-image list. The Qt replacement
+   may adapt ListView painting, but it must retain separate avatar and status
+   roles and must not convert, redraw, or replace either source asset.
+2. `OnGetdispinfo` displays `GetScreenName()` normally and `GetAttedNick()`
+   only for the source test flag. List mode chooses status cell 3 for ignored,
+   4 for away, 1 for operator, 2 for spectator, and 0 otherwise. Icon mode
+   chooses the original avatar's `m_iconIndex` and state-image values 4, 5, 2,
+   3, or 1 in the same priority order. State-image values are one-based while
+   the bitmap cells are zero-based.
+3. `GetSortPosition` groups operator, normal/speaker, and spectator in that
+   order, then compares screen names case-insensitively after removing
+   enclosing double quotes. Existing selection and focus survive a resort.
+   `UpdateSpectators` sets spectator only for non-operators in a moderated
+   room without voice and redraws the existing rows; it does not recreate
+   users or synthesize roles.
+4. `CMemberListCtrl::OnChar` forwards every generated character except Tab to
+   the Say control exactly once. `CMemberList::OnKeyDown` sends Tab or
+   Shift+Tab through `CycleFocus(CHATFOCUS_MEMBERLIST, ...)`. Double-click uses
+   `GetSingleSelectedMember`, requests `ChatGetInfo` only for a Comic Chat
+   user, and otherwise formats `IDS_NOTCOMICSUSER`; multiple selection performs
+   no double-click action.
+5. `CUserInfo::SelectInMemberList` clears both selection and focus unless
+   extending, then applies selection/focus to the exact PUI row.
+   `MListTalkTosToPuiself` copies every selected non-self PUI. The separate
+   `GetSelectedPuis` Whisper action preserves the original post-increment loop:
+   it excludes self and can retain eleven selected PUIs even though the source
+   comment says ten. This source control flow is not creatively corrected.
+6. Mouse context handling hit-tests the member row; keyboard context uses the
+   selected row, refuses more than one selection with the platform beep, and
+   uses `IDR_MEMBERCONTEXT` only on empty comic-list space. A member row uses
+   `IDR_MEMBERADMIN` only when self is operator and otherwise
+   `IDR_IRC_MEMBER`. `ID_MEMBER_GETCHAR` is inserted immediately after Get
+   Profile/Get Identity only in unrated-capable comic mode. The Macros popup is
+   the exact `MACROSUBMENUTEXT` position 6 or `MACROSUBMENUCOMIC` position 7;
+   its Define item, separator, defined macros, labels, states, and Alt digits
+   mirror the source View/Macros menu without sample macros.
+7. Message-map command rules are binding: Profile needs any selected comic
+   user; Ignore needs any non-self selection and is checked only when every
+   eligible selection is ignored; Notifications needs exactly one full
+   identity and `m_iAutoPage == -1`; Identity, Version, Ping, and Local Time
+   need an in-channel selection; E-mail needs one non-self comic user;
+   Homepage needs one comic user; Whisper/Kick need one non-self user; Ban
+   permits zero or one selection but never selected self; Host/Speaker need
+   one selection, in-channel operator self; Spectator additionally needs a
+   moderated room. Host, Speaker, Spectator, Ignore, Icon, and List retain the
+   original checked/radio conditions.
+8. Source-backed actions continue through the original `CChatDoc` and
+   `CRoomInfo` functions. `ID_SEND_FILE` remains assigned to priority-4
+   `filesend.*`; `ID_START_NETMEETING` and the WinInet custom-art transfer
+   behind `ID_MEMBER_GETCHAR` remain deferred under the declared non-gating
+   policy. Their missing platform mechanics are not replaced with another
+   transfer or meeting flow.
+
+Implemented when:
+
+- Both list and icon views expose the exact status priority from the unchanged
+  `IDB_MEMBER` cells, icon mode uses the member's original avatar icon, quoted
+  names and role groups sort as above, and live away/ignore/mode changes update
+  existing rows without losing selection.
+- Character forwarding, Tab cycling, single-selection double-click, explicit
+  selection extension/clearing, the source eleven-entry Whisper boundary, and
+  mouse/keyboard context behavior have offscreen regressions.
+- Every non-deferred member resource command has its source enable/check rule
+  and reaches the original document/protocol handler; deferred commands stay
+  visible only where the source resource places them and cannot invoke an
+  invented substitute.
+- The focused member tests, all consolidated CTests, Debug and Release builds,
+  isolated offscreen startup, `git diff --check`, and the dummy-content scan
+  pass, and this block plus the TODO ledger record the verified result.
+
+Implementation and verification:
+
+- `memblst.*` restores the original-named `CMemberListCtrl` and
+  `m_MemberListBox` boundary. List and icon modes keep separate status,
+  one-based state, and avatar-image roles; display labels honor `m_bDoTest`;
+  operator/normal/spectator sorting strips enclosing quotes; spectator refresh
+  updates existing rows without replacing their selection.
+- Member-list key handling forwards one source character to `CSayCtrl`, sends
+  Tab and Shift+Tab through `CycleFocus`, and double-click resolves the
+  document's single selected PUI. `CUserInfo::SelectInMemberList`,
+  `FindMemberListIndex`, `RemoveMemberFromList`, `MListTalkTosToPuiself`, and
+  the source's actual eleven-entry `GetSelectedPuis` boundary retain their
+  original names and responsibilities.
+- Context menus use `IDR_MEMBERCONTEXT`, `IDR_IRC_MEMBER`, and
+  `IDR_MEMBERADMIN` directly. The Macros popup uses the exact source positions;
+  the main Member menu and popup both insert `ID_MEMBER_GETCHAR` immediately
+  after Profile/Identity. Profile, Ignore, Notifications, Identity, Version,
+  Ping, Local Time, E-mail, Homepage, Whisper, Kick, Ban, and role commands use
+  the source enable/check conditions and original document/protocol calls.
+  DCC File Send, NetMeeting, and custom-art transfer mechanics remain deferred
+  and no substitute is invoked.
+- `original-member-commands`, `original-pageview-interaction`, and
+  `original-ui-structure` use resource strings and directly enumerated AVBs to
+  cover status priorities, avatar roles, sorting, selection/focus, keyboard and
+  mouse context paths, the eleven-entry boundary, exact role wire commands,
+  dynamic menu placement, and command states. A debugger run found that the
+  first test simulation still held two selected Qt rows before its intended
+  single-selection double-click; the fixture clears the selection first,
+  while the product's source-defined multiple-selection no-op remains intact.
+- Fresh Debug and Release builds each pass all 45 CTests. Both isolated
+  offscreen applications remain active through the intentional three-second
+  timeout. `git diff --check`, the documentation path scan, and the added-line
+  dummy-content scan are clean; no runtime participant, room, message, or
+  starring value is retained.
 
 ### Completed work block: original Comic font startup and selector
 
@@ -391,11 +508,11 @@ criteria and tests are satisfied and recorded here.
 | 3. Avatar/emotion/BodyCam | Pose/body/emotion/index core, AVB drawing, and BodyCam with original emotion bitmaps, mouse, keyboard, freeze, and send-expression behavior are ported. Character double-click, focus tab cycle, several error/PropertyPage couplings, download/RealInfo, and ArtDir switching are unimplemented. | `avatar.*`, `avatario.*`, `bodycam.*`, `textpose.cpp`, and required geometry produce the same selection/index/emotion results as the original functions; BodyCam draws the selected real avatar using only original emotion bitmaps; mouse, keyboard, freeze, and `<Chr>` paths match the original branches. |
 | 4. Comic layout and rendering | Panel/page lifecycle, real backdrops/avatars, speaker/Talk-To order, zoom, collision layout, Woodring balloons, think/whisper/action, scrolling, resize autofit/history reflow, body/label hit testing, selection, tooltip, URL hotlinks, comic/member context menus, starring, on-screen iteration of all pages, and printing are ported. Stacked page positioning is absent from the original and is recorded as `unresolved`, not a port defect. | `CPageView`, `CPage`, `CUnitPanelPage`, `CPanel`, `CUnitPanel`, `CBalloon`, and original geometry modules preserve call order; panels use real backdrops/avatars; wrapping, SplitHeight, tail routing, panel changes, autofit, URL formatting segments, resource context menus, starring, and printer-specific grids derive from original state without substitute graphics or invented dimensions. Multiple pages are drawn, measured, and hit-tested in original list order; the port invents no page spacing. |
 | 5. IRC/IRCX transport and parser | **Implemented for the required priority-1 scope.** The line parser, complete command/result/error surface, required queries, Auth 0/1, service reconnect, raw-byte receive, `CSInString`, ACP, Far-East DBCS/JIS, and CP932 one-chunk behavior are ported. SSPI/Auth 2/3 and IdentD are deferred and excluded. | `ircsock.*`, `ircproto.*`, `query.*`, `intl.*`, JIS/SJIS, and glue handle every required command/numeric with identical arguments, status/query effects, and send strings; socket I/O and Win32 code-page APIs are Qt/platform replacements only. Tests feed only source-derived lines and compare exact outgoing bytes and state changes. |
-| 6. Join, user/room, and starring | Self JOIN, `353`/`366`, enumeration, member list, title/starring, nick/part/quit/kick, avatar assignment, Talk-To, and ignore/flood behavior are ported for tested original branches. Additional mode/WHO/topic/error branches and multi-room edge cases are incomplete. | Self JOIN, `353`, `366`, query lifecycle, `CIUserJoin`, `AddToMembersList`, `ProcessEndEnumeration`, `UpdateTitle`, `AddStars`, and `AddStarsAux` follow the documented original path; no invented star appears before real NAMES data ends; unresolved original couplings remain empty rather than being replaced by assumptions. |
+| 6. Join, user/room, and starring | Self JOIN, `353`/`366`, enumeration, title/starring, nick/part/quit/kick, avatar assignment, Talk-To, ignore/flood behavior, and the complete source-defined member-list slice are ported and tested. The list/icon status roles, selection/keyboard/context behavior, dynamic Member menu, and all non-deferred member actions follow their original boundaries. | Self JOIN, `353`, `366`, query lifecycle, `CIUserJoin`, `AddToMembersList`, `ProcessEndEnumeration`, `UpdateTitle`, `AddStars`, and `AddStarsAux` follow the documented original path; no invented star appears before real NAMES data ends; unresolved original couplings remain empty rather than being replaced by assumptions. |
 | 7. Sending/receiving Comic Chat data | `bInsertAnnotations`, gesture/expression, modes, Talk-To, IRCX DATA, plain-IRC prefix, formatting chunks, local echo, ACP/DBCS wire conversion, and the associated `ProcessSay`/panel path are ported and tested. Remaining source-defined Comic Chat CTCP/comment/URL edges belong to priority 2. DCC is a separate priority-4 feature; MCI/Sound is deferred. | Annotations and IRC lines produced by `bChatSendText` match `IndexToByte`, `EmotionToBytes`, `BM2SM`, `bInsertAnnotations`, and `bChatSendToTarget` byte-for-byte; receive code sets the same `CUserDisplayInfo` fields and invokes the same `ProcessSay`/history/panel path. |
 | 8. Document/history/text mode/input | HistoryEntry/replay core, text/status view, RichEdit, Doskey, Whisper Box, its rule/macro cross-paths, and the MDI base model with hidden status document and room child frames are ported. Full conversation-file/dialog integration, focus/enable paths, child-frame persistence, and URL integration remain. MCI/Sound is deferred. | Original classes and methods exist under their original filenames; comic/text/status/whisper views show the same history events, formatting, and enable states; required Enter/Shift/Tab/accelerator and Say/Think/Whisper/Action paths follow `saywnd.*`/`rtfctrl.*`. |
 | 9. Main UI and all resources | `QMdiArea` replaces the MFC MDI layer; room/status child frames, tab activation, basic window commands, and the three-band coolbar with resource buttons, styles, context menu, and persistence are ported. Exact menus/submenus, complete command UI, additional context menus, accelerators, status bar, and Win98 metrics are partial. | Every visible action/subaction in `chat.rc` is wired with the same ID, order, caption, shortcut, check, and enable logic; layout/splitter/tab bar follow original methods and resource dimensions; colors are fixed Win98 values rather than host palette values. |
-| 10. Dialogs, lists, and administration | Setup/Personal/Character/Background, direct `CServersPage`, Text Font, Channel Properties/Create, MOTD/Away, room/user lists, Kick/Ban/Invite/Invitation, and Host/Speaker/Spectator commands are partially ported or implemented for their evidenced core. The Servers page is the final Options tab and applies atomically through `CChatServiceUI`. Settings, Comic Font options, profile-format roundtrip, and additional member actions are incomplete; the original `eOnInvitation` hook is connected and tested. | Every canonically built dialog module mirrors controls, IDs, validation, defaults, and protocol calls from `chat.rc` and message maps; lists sort/filter and buttons enable exactly as in the original. |
+| 10. Dialogs, lists, and administration | Setup/Personal/Character/Background, direct `CServersPage`, Text Font, Channel Properties/Create, MOTD/Away, room/user lists, Kick/Ban/Invite/Invitation, and Host/Speaker/Spectator commands are partially ported or implemented for their evidenced core. The Servers page is the final Options tab and applies atomically through `CChatServiceUI`. Member actions are complete; remaining gaps are dialog-specific settings, profile-format roundtrip, and exact page/validation edges. The original `eOnInvitation` hook is connected and tested. | Every canonically built dialog module mirrors controls, IDs, validation, defaults, and protocol calls from `chat.rc` and message maps; lists sort/filter and buttons enable exactly as in the original. |
 | 11. Rules, automation, notifications, and auxiliary functions | `rules.*`, `CCDaemonExt`, `notif.*`, `notipage.*`, `autopage.*`, macros, and the source-supported part of `actions.*` are ported. Four-page Automation, version-1 rule/`.crs`/notification serialization, `REG_MULTI_SZ` macros, rule/notification registry roundtrips, matching, filtering, delay, flood, direct events, server-side enumeration, and definition/user windows are tested. `CChatServiceList` supplies server parameters to rules/notifications, and `aConnect` uses the original reconnect path. Deferred Sound actions and unavailable text-file actions remain disabled without substitute data. Favorites, Save/Open/Print, URLs, and settings belong to their original modules. | Every required module built by `chat.mak` is ported and its source-backed normal paths function; persistence formats and rule serialization remain compatible; disabled Modern download paths remain disabled exactly as in the original source. |
 | 12. Platform boundaries and completion | OLE/DocObject/Automation and historical Win32 integrations do not always have Qt/Linux counterparts; NetMeeting is excluded from the Modern build. | Every visibly portable function is implemented; each blocker names the file, symbol, and missing platform capability. NetMeeting and unbuilt legacy behavior are not invented. Debug and Release CMake builds and all tests run from `v2.5-beta-1-qt/build`; normal code paths contain no placeholder or dummy output. |
 
@@ -1075,7 +1192,7 @@ and IdentD are explicitly deferred and do not weaken this acceptance claim.
 | `CREATE` receive path and user visibility | `cmdidCreate` creates a document-bound `NewDefaultProto`, moves the room into in-channel state through `bProcessAddChannel`, and queues `qpInitialNames`, `qpInitialTopic`, `qpInitialMode`, `qpInitialWho`, plus IRCX-only `qpJoinBackUrl` in source order; it creates no participant or starring data. Before the connection action, `CIrcProto::OnLogin` invokes original `SetVisibility(theApp.m_flags1 & F1_USERVISIBLE)`. `ctSetUserMode` sends exactly `MODE <nick> +i` for `qpSetInvisible` and `MODE <nick> -i` for `qpSetVisible`; a self `MODE <nick> :+i/-i` echo changes `F1_USERVISIBLE` and removes the matching query by the source branch. Codes `221`, `301`, `305`, and `306` change no application state and select only `CIrcPrint` formatting. `924` removes a matching PICS Join/Create query but does not continue with invented success without rating provider/RoomInfo store. Login and state tests cover exact visibility bytes, query purposes, flag changes, and the `CREATE` initial-query set. |
 | IRC status output in `status.*` | `CIrcPrint` contains source types `PT_NOTINIT`, `PT_WHOLESTRING`, `PT_LASTSTRING`, `PT_NONE`, and `PT_OFFSET` with color, offset, and group newline. `AddToStatus` remains in `status.cpp`, searches only the actual `CStatusView` document, extracts trailing or offset-based text, strips CR, shifts optional format ranges, maps fixed `COLORREF` to `QTextCharFormat`, and writes through `CTextCore::iDisplayInfo(mtGetInfo)`; without a status view it has no effect. `ProcessMessage` finalizes each handled path through this descriptor. PING/JOIN/CREATE/chat/Part/Quit/Kill/Whisper are suppressed in status; user MODE, `221`, `301`, `305`, and `306` use source formats; Welcome is displayed once before `OnLogin`. Unknown commands/replies remain invisible as in the original release path. `DecodeNickForScreen` in `ircproto.*` decodes IRCX nicks and adds original outer quotes around C1-control/blank-equivalent characters; `CUserInfo`, `GetMyScreenName`, nick changes, and Away reporting use the helper. TextView/parser tests cover status color/separation and normal/quoted names derived from original resources. |
 | MDI base model, hidden status document, and self-`JOIN` child frame | `childfrm.*` retains its original name and contains exactly one `CChatView` client per document; `QMdiArea` replaces only MFC MDI mechanics. Startup creates a dedicated `CChatDoc` with `m_bStatusView=TRUE`, `STATUS_WINDOW_NAME`, and a real `CStatusView` before normal room documents, but keeps it hidden and without a tab as `CreateStatusWnd` does. Showing/closing status sets `F0_SHOWSTATUSWINDOW`, adds/removes the status tab, and hides rather than destroys it. MDI activation invokes document-bound `SetChatDoc`/`LoadDocData`/`ResetStatus`; tabs activate the corresponding child. Empty document titles use `Room` from the `IDR_MAINFRAME` document string with MFC-style sequence numbers, and the frame title follows `AFX_IDS_APP_TITLE - [RoomN]`. On self JOIN, `bProcessAddChannel` uses a matching/empty slot or creates a child through the `ID_FILE_NEW` branch before binding room protocol, connection state, and four initial queries. `original-mdi-join` uses only default resources and source-backed JOIN form and proves no self PUI or starring exists without `353`. Cascade, horizontal/vertical tile, base Autoarrange flag, and status command are connected. Exact child occlusion, `F1_MAXMDI`/window-rectangle persistence, menu switching, and complete Close/SaveModified behavior are unresolved. A full build and nineteen CTests cover this scope. |
-| Member context menus and information actions | For empty space, a normal participant, and self operator, `memblst.cpp` loads `IDR_MEMBERCONTEXT`, `IDR_IRC_MEMBER`, or `IDR_MEMBERADMIN` directly from `chat.rc`; no handwritten labels or TODO output remain. The `IDD_BAN` resource placeholder removed at runtime by `AddMacroMenu` is hidden without a macro list, leaving the submenu empty/disabled. `CChatDoc` provides `GetNextSelectedMember`, `SelectedMemberCount`, `OnMemberGetinfo`, `OnMemberIgnore`, `OnGetidentity`, `OnGetVersion`, `OnPingUser`, `OnGetLocaltime`, `OnSendEmail`, and `OnVisitHomepage`. Enable/check conditions follow corresponding `OnUpdate...` functions. `CIrcProto::ChatGetIdentity` displays known `user@host` through `IDS_REPORT_IDENT2` and `GetInfoEntry`, or queues `qpGetIdent/ctWhoIs`; `311` calls `ShowIdentity` only for that query and `318` ends it. Qt list sorting preserves selection and the focused item as original ListView sorting does. `original-member-commands` uses only default resources and a directly enumerated AVB name to cover exact Profile/WHOIS/VERSION/TIME/EMAIL/URL/PING requests, identity history, and ignore toggle. |
+| Member list, context menus, and information actions | `CMemberListCtrl` and `m_MemberListBox` retain the original names. The white list keeps separate direct-asset avatar/status roles, one-based icon-mode state images, `m_bDoTest` labels, operator/normal/spectator ordering, quote-free comparison, in-place spectator refresh, and selection/focus across sorting. Character forwarding, Tab cycling, single-selection double-click, explicit selection extension, all-selected Talk-To, and the source's actual eleven-entry Whisper limit are restored. Empty space, a normal participant, and self operator load `IDR_MEMBERCONTEXT`, `IDR_IRC_MEMBER`, or `IDR_MEMBERADMIN` directly; keyboard context rejects multiple selection. Macros use source positions 6/7, and `ID_MEMBER_GETCHAR` is inserted after Profile/Identity in popup and main Member menus. Every non-deferred command uses its matching `OnUpdate...` condition and original handler, including Notifications and role radio state. `CIrcProto::ChatGetIdentity` displays known `user@host` through `IDS_REPORT_IDENT2` and `GetInfoEntry`, or queues `qpGetIdent/ctWhoIs`; `311` calls `ShowIdentity` only for that query and `318` ends it. The three member/menu regressions use only resource values and directly enumerated AVBs. DCC, NetMeeting, and custom-art transfer remain explicitly deferred without substitutes. |
 | Direct dialog resources | `src/qt/originalassets.*` reads `DIALOG`/`DIALOGEX`, `CAPTION`, and multiline controls with quoted commas directly from unmodified `chat.rc`; no resource is copied and no asset converted. `setupdlg.cpp` obtains Setup radio buttons, welcome text, Favorites/Server, Channel/Password labels, tabs, and standard buttons from `IDD_SETUPDIALOG`, `IDD_CHANNEL`, and original property pages. `proppage.cpp` obtains Personal/Character/Background labels and `IDS_OPTIONS` from the same resources. Non-original class name `CChannelPropDlg` is replaced by original `CChannelProp`; `CChannelCreateDlg` derives from it and uses `IDD_CHANNELCREATE` controls. `original-assets` covers dialog dimensions and concrete original text, including a quoted comma. A full build and twenty CTests cover resource origin; DLU-exact layout and completeness are separate criteria. |
 | `chanprop.*` room properties/create controls and topic/mode protocol | `CChannelProp` owns original fields, `CRtfCtrl m_rtfTopic`, host/topic-only/read-only messages, every visible control, mutually exclusive Hidden/Private, `MAX_TOPICLEN`, `MAX_CHANNELPWD`, IRC/IRCX room-name limits, user limit 0..10000 with waiver for an existing higher value, and Auditorium/No-whispers controls hidden by `chat.rc`. Dialog font, DLU coordinates, caption, text, style, and visibility come directly from `IDD_CHANNELPROP`/`IDD_CHANNELCREATE`; Qt calculates only documented dialog-unit mapping. `CRoomInfo::DoChannelDialog` copies topic formatting and room state, calls `ChatSetTopic` for text/format differences, forms modes starting at `CM_NOEXTERN`, and invokes `ChatSetMode`. `CIrcProto::ChatSetTopic`, `GetModeChars`, and `ChatSetMode` send source-backed query/mode lines with `p,s,i,t,n,m,l,k` order and key unset before set. Main and text context menus enable `ID_CHANNELPROPS` with original in-channel/self/member condition. `original-channel-properties` uses only original resources/constants to cover resource geometry, visibility, three rights cases, Create fields, topic query, exact mode bytes, and the shared ACP/DBCS encoder boundary. |
 | Enter/Create/Leave source behavior | From `chat.cpp`, `protsupp.cpp`, `ircsock.cpp`, `ircproto.cpp`, `setupdlg.*`, `chanprop.*`, and `chat.rc`: `ID_SESSION_NEWROOM` invokes `ChatSwitchChannel(NULL)`, `ID_ROOM_CREATEROOM` invokes `ChatCreateRoom(g_enterInfo)`, and `ID_SESSION_LEAVE` closes the active in-channel document. `ChatSwitchChannel` reads `IDD_CHANNEL`, sets `g_bEnterOnCreate=FALSE`, and passes through `bSwitchToRoom`. `ChatCreateRoom` reads `IDD_CHANNELCREATE`, gathers selected flags/limit/key starting at `CM_NOEXTERN`, copies topic and formatting, sets `m_bSetMode=TRUE`, encodes the channel, sets `g_bEnterOnCreate=TRUE`, and also calls `bSwitchToRoom(NULL)`. `bSwitchToRoom` confirms Away, activates a live room, closes a same-named disconnected room, or sets `g_bCXPrompt=FALSE` and invokes `InitializeChannelConnection`, which sends `JOIN` or `CREATE` by path. Create modes and formatted topic are applied only upon matching `324 RPL_CHANNELMODEIS`: `CChatApp::m_enterInfos` finds exact `CRoomInfo`, `ParseChannelMode` reads server state, then `ChatSetMode` and optional `SzControlFull`/`ChatSetTopic` run before the RoomInfo entry is removed or `g_enterInfo` is cleared through `bInitEnterInfo`. Acceptance covers null vs explicit channel argument, room activation, dialog cancel, comma failure, `g_nCXKeepServer`/`g_bCXPrompt`, exact wire strings, and RoomInfo lifetime. Self `CREATE`, `353`, and `366` never expose local Create data as participant or starring. |
@@ -1139,7 +1256,7 @@ This block is source-read. Qt targets remain `src/original/histent.*`, `chatdoc.
 | Excluded/obsolete files | `cache.cpp`, `nmproto.*`, `urlfind.cpp`, `wmini.cpp`, and similar non-canonical or incomplete files are not normal Modern product code. | Reuse `X`; they are not compiled or used to invent behavior. |
 | Shared cores | Wrappers for `ccommon`, `ccomp`, JIS converters, `urlutil`, and `dlylddll` select external core files. | Selected code is ported or explicitly bounded. Tables, byte ownership, URL bounds, and delayed-DLL semantics stay source-defined. |
 | Setup/options/persistence | `setupdlg.*` and `proppage.*` define registry fields, macros, filters, Connect, Favorites, Settings, Personal/Profile, Character, Background, Text/Comic fonts, Servers, and Coolbar persistence. | Major defaults, persistence, services, macros, rules, notifications, coolbar, text-font UI, art pages, and server page are ported. Locator, favorites, some dialogs, and page metrics remain. |
-| `query.*`, `userinfo.*`, `memblst.*` | Queries own purpose/type/data/refcounts/rank. Users own exact flags/request bits/avatar/profile state. Member list owns source sorting, status, context menus, and selection semantics. | Query core, daemon ownership, selected user/member behavior, and many commands are ported; full flags, icons, request counters, and enable edges remain. |
+| `query.*`, `userinfo.*`, `memblst.*` | Queries own purpose/type/data/refcounts/rank. Users own exact flags/request bits/avatar/profile state. Member list owns source sorting, status, context menus, and selection semantics. | Query ownership and request credits, user flags/profile/qualified-name state, direct avatar/status roles, list/icon modes, sorting, selection/keyboard behavior, context resources, dynamic character entry, and every non-deferred member command/update edge are ported and tested. |
 | `ircproto.*` | Source bytes define login, join/create/part, send chunking, PRIVMSG/DATA, modes, admin, queries, identity, visibility, annotation send, low-level quoting, and encoding boundaries. | Required priority-1 paths are ported/tested, including ACP/DBCS/JIS, direct target bytes, query send paths, and CP932 single-chunk behavior. IdentD is excluded as a deferred adjunct. |
 | `ircsock.*` | Source parser/table, login/auth, command dispatch, numerics, errors, JOIN/NAMES, messages, status printing, and query cleanup are authoritative. | Required priority-1 parser, command, result, error, query, login, join/message, list, administration, rules/notification, and status paths are ported and source-audited. Deferred SSPI paths do not gate completion. |
 | `protsupp.*` | User/member lifecycle, comments, UDI, CTCP/action/sound/DCC/info, ignore/flood, rules, slash commands, sends, room switching, enumeration end, rating, encoding, and reconnect are the glue boundary. | Standard IRC glue, Join/Starring, UDI send/receive core, whisper, ignore/flood, info, administration, lists, reconnect, key strings, multi-room routing, and slash paths are ported. Remaining source-defined Comic Chat CTCP/comment edges belong to priority 2; DCC is priority 4 and Sound is deferred. |
@@ -1162,7 +1279,7 @@ This list comes from `chat.mak` and `base/sources`. `Partial port` means a same-
 | `chat`, `mainfrm`, `chatdoc`, `chatview`, `childfrm`, `tabbar`, `chatbars`, `coolbar`, `spltchat`, `status` | app/UI shell files | R2 | Main shell, MDI/status/tabs, views, splitters, bars, and many commands are ported; full close/save/menu/focus edges remain. |
 | `chatsrv`, `setupdlg`, `proppage`, `chanprop`, `motd`, `roomlist`, `userlist`, `whisprbx` | dialogs/service/list files | R1/R2 | Major original dialogs and service/list/whisper/text-font models are ported/tested; selected validation gaps remain. DCC dialog work is priority 4; Sound is deferred. |
 | `format`, `rtfctrl`, `rtfcmb`, `saywnd`, `textcore`, `textview`, `txtfntdg` | text/input files | R1/R2 | Formatting, input, TextCore, text view, printing, RTF control, and the full text-font dialog are ported; RTF stream, `rtfcmb`, and required URL edges remain. Sound is deferred. |
-| `ircproto`, `ircsock`, `protsupp`, `query`, `userinfo`, `memblst` | IRC/protocol/state files | R1/R2 | Required priority-1 parser, sending, command/result/error, query, encoding, login, Join/NAMES, messaging, list, administration, and reconnect paths are ported and tested. Comic Chat CTCP/comment and remaining member/UI behavior continue under priorities 2 and 3. Deferred SSPI and IdentD are not part of this completion count. |
+| `ircproto`, `ircsock`, `protsupp`, `query`, `userinfo`, `memblst` | IRC/protocol/state files | R1/R2 | Required priority-1 parser, sending, command/result/error, query, encoding, login, Join/NAMES, messaging, list, administration, reconnect, and complete non-deferred member-list behavior are ported and tested. Remaining Comic Chat CTCP/comment behavior continues under priority 2; broader shell UI continues under priority 3. Deferred SSPI and IdentD are not part of this completion count. |
 | `ccommon`, `ccomp`, `jis2sjis`, `sjis2jis`, `intl`, `urlutil` | shared/encoding/URL cores | R0/R1 | Active byte, mask, conversion, DBCS, and URL semantics are ported or explicitly bounded; disabled legacy blocks stay excluded. |
 | `filesend` | DCC file-transfer adjunct | R1/R2 | Audited and assigned priority 4; disabled until its complete original CTCP/socket/dialog path is implemented. |
 | `sounddlg`, `mcithrd`, `webreq` | audio/download adjuncts | R3 | Audited, deferred, and non-gating; disabled without substitutes. |
@@ -1182,7 +1299,7 @@ This analysis is the binding basis for the Qt port. It describes only behavior v
 | Menus/toolbars/accelerators | `chat.rc`, `resource.h`, `chatbars.*`, `coolbar.*` | main menu, toolbars, context menus, accelerators | Menu/rebar at top. | Resource-built menus and three toolbar bands with Favorites dropdown, Comic/Text group, Away check, text-format checks, context menu, and packed persistence. | `src/original/chatbars.*`, `src/original/coolbar.*`, `src/original/mainfrm.*` |
 | Comic output | `pageview.*`, `panel.*`, `balloon.*`, `wmini.cpp` | `IDR_VIEWCONTEXT`, `IDR_AVATARCONTEXT`, `ID_STARRING`, title strings | Left upper comic area. | Pages draw panels; title/starring from `AddTitle`/`UpdateTitle`; stars from real `g_mapNickToPtr`; balloons from source geometry. | `src/original/pageview.*`, `src/original/panel.*`, `src/original/balloon.*`; excluded `wmini.cpp` only if proven active |
 | Input/Say window | `saywnd.*`, `rtfctrl.*`, `format.cpp` | `ID_SAYCTRL`, Say bar, send/action/sound/format commands, `IDR_FORMATTING` | Lower left/input area. | Enter sends through `bChatSendText`; buttons invoke original handlers; RTF control handles formatting, accelerators, context, Doskey; format core maps control codes/URLs. | `src/original/saywnd.*`, `src/original/rtfctrl.*`, `src/original/format.cpp` |
-| Member list | `memblst.*`, `userinfo.*`, `protsupp.*` | member context resources and commands | Right upper comic area or right text area. | Icon/list modes, source sorting, double-click profile, context actions, and protocol-driven insert/remove. | `src/original/memblst.*`, `src/original/userinfo.*`, `src/original/protsupp.*` |
+| Member list | `memblst.*`, `userinfo.*`, `protsupp.*` | `IDB_MEMBER`, `IDR_MEMBERCONTEXT`, `IDR_IRC_MEMBER`, `IDR_MEMBERADMIN`, member commands | Right upper comic area or right text area. | Direct avatar/status icon and list modes, source sorting, test labels, selection/focus and Tab/character handling, single-selection profile double-click, mouse/keyboard resource contexts, dynamic Get Character, role radios, and protocol-driven insert/remove. | `src/original/memblst.*`, `src/original/userinfo.*`, `src/original/protsupp.*` |
 | BodyCam | `bodycam.*`, `avatar.*`, `avatario.*`, `textpose.cpp` | body context, emotion strings, face icons | Lower-right pane. | Draws avatar preview and emotion wheel; mouse/keys update `CEmotion`; freeze/send-expression use source commands; emotion bytes from `avatario.*`. | `src/original/bodycam.*`, `src/original/avatar.*`, `src/original/avatario.*`, `src/original/textpose.cpp` |
 | Connect/setup/options/room dialogs | `setupdlg.*`, `proppage.*`, `chanprop.*`, `chat.rc` | setup, settings, personal, character, background, servers, channel, properties, create resources | Modal property sheets/dialogs. | Servers/favorites/channel, join/list/connect-only actions, identity/profile, art previews, server/security config, enter room, room properties, and create room all use source controls and validation. | `src/original/setupdlg.*`, `src/original/proppage.*`, `src/original/chanprop.*` |
 

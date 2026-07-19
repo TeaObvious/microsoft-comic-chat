@@ -9,6 +9,7 @@
 #include "doskey.h"
 #include "ircproto.h"
 #include "mainfrm.h"
+#include "memblst.h"
 #include "originalassets.h"
 #include "panel.h"
 #include "saywnd.h"
@@ -16,11 +17,13 @@
 #include "status.h"
 #include "tabbar.h"
 #include "avatario.h"
+#include "userinfo.h"
 
 #include <QApplication>
 #include <QAction>
 #include <QLabel>
 #include <QMenuBar>
+#include <QMenu>
 #include <QMdiArea>
 #include <QDebug>
 #include <QImage>
@@ -36,6 +39,39 @@ namespace {
 bool nearPercent(int part, int total, int expected)
 {
     return total > 0 && std::abs(part * 100 - total * expected) <= total * 2;
+}
+
+QMenu* menuWithDirectCommand(QMenuBar* menuBar, const QString& command)
+{
+    if (!menuBar) return nullptr;
+    for (QAction* rootAction : menuBar->actions()) {
+        QMenu* menu = rootAction->menu();
+        if (!menu) continue;
+        for (QAction* action : menu->actions()) {
+            if (action->data().toString() == command) return menu;
+        }
+    }
+    return nullptr;
+}
+
+QAction* directCommand(QMenu* menu, const QString& command)
+{
+    if (!menu) return nullptr;
+    for (QAction* action : menu->actions()) {
+        if (action->data().toString() == command) return action;
+    }
+    return nullptr;
+}
+
+QStringList directCommands(QMenu* menu)
+{
+    QStringList commands;
+    if (!menu) return commands;
+    for (QAction* action : menu->actions()) {
+        const QString command = action->data().toString();
+        if (!command.isEmpty()) commands.append(command);
+    }
+    return commands;
 }
 }
 
@@ -318,6 +354,92 @@ int main(int argc, char** argv)
         qWarning() << "mdi initial" << frame.GetActiveDocument()
                    << document.GetTitle();
         return EXIT_FAILURE;
+    }
+
+    {
+        if (!document.m_memberList || !document.m_proto)
+            return EXIT_FAILURE;
+        const QString savedNick = theApp.m_myNick;
+        const INT savedAutoPage = theApp.m_iAutoPage;
+        const ConnectionStatus savedStatus = document.GetConnectionStatus();
+        const QString selfNick = originalResourceString(
+            QStringLiteral("IDS_DEFAULT_NICK"));
+        QString memberName;
+        GetNextAvatarName(memberName);
+        if (memberName.isEmpty()) return EXIT_FAILURE;
+        const QString server = originalResourceString(
+            QStringLiteral("IDS_DEFAULT_SERVER"));
+        CUserInfo selfMember(selfNick, selfNick + QLatin1Char('@') + server);
+        CUserInfo otherMember(memberName,
+                              memberName + QLatin1Char('@') + server);
+        selfMember.ComicUser(true);
+        otherMember.ComicUser(true);
+        otherMember.SetAvatarRealInfo(memberName,
+                                      originalResourceString(
+                                          QStringLiteral("IDS_URL_MSPREFIX")));
+        theApp.m_myNick = selfNick;
+        theApp.m_iAutoPage = -1;
+        document.m_bComicView = true;
+        document.m_puiSelf = &selfMember;
+        g_puiSelf = &selfMember;
+        document.m_allChannelPuis.append(&selfMember);
+        document.m_allChannelPuis.append(&otherMember);
+        document.m_memberList->AddUser(&selfMember);
+        document.m_memberList->AddUser(&otherMember);
+        otherMember.SelectInMemberList(&otherMember, TRUE, FALSE);
+        document.m_proto->SetConnectionStatus(CX_INCHANNEL);
+
+        QMenu* memberMenu = menuWithDirectCommand(
+            frame.menuBar(), QStringLiteral("ID_MEMBER_GETINFO"));
+        if (!memberMenu) return EXIT_FAILURE;
+        memberMenu->aboutToShow();
+        application.processEvents();
+        const QStringList commands = directCommands(memberMenu);
+        const int profile = commands.indexOf(
+            QStringLiteral("ID_MEMBER_GETINFO"));
+        const int identity = commands.indexOf(
+            QStringLiteral("ID_GETIDENTITY"));
+        const int character = commands.indexOf(
+            QStringLiteral("ID_MEMBER_GETCHAR"));
+        QAction* notifications = directCommand(
+            memberMenu, QStringLiteral("ID_ADDTONOTIFICATIONS"));
+        QAction* getCharacter = directCommand(
+            memberMenu, QStringLiteral("ID_MEMBER_GETCHAR"));
+        if (profile < 0 || identity != profile + 1
+            || character != identity + 1
+            || !notifications || !notifications->isEnabled()
+            || !getCharacter || !getCharacter->isEnabled()
+            || getCharacter->text() != originalResourceString(
+                QStringLiteral("IDS_GET_CHARACTER"))) {
+            qWarning() << "member menu state" << commands
+                       << (notifications && notifications->isEnabled())
+                       << (getCharacter && getCharacter->isEnabled());
+            return EXIT_FAILURE;
+        }
+
+        theApp.m_iAutoPage = 1;
+        memberMenu->aboutToShow();
+        if (directCommand(memberMenu,
+                          QStringLiteral("ID_ADDTONOTIFICATIONS"))->isEnabled()) {
+            return EXIT_FAILURE;
+        }
+        theApp.m_iAutoPage = -1;
+        document.m_bComicView = false;
+        memberMenu->aboutToShow();
+        if (directCommand(memberMenu, QStringLiteral("ID_MEMBER_GETCHAR")))
+            return EXIT_FAILURE;
+        document.m_bComicView = true;
+        memberMenu->aboutToShow();
+        if (!directCommand(memberMenu, QStringLiteral("ID_MEMBER_GETCHAR")))
+            return EXIT_FAILURE;
+
+        document.m_memberList->Clear();
+        document.m_allChannelPuis.clear();
+        document.m_puiSelf = nullptr;
+        g_puiSelf = nullptr;
+        document.m_proto->SetConnectionStatus(savedStatus);
+        theApp.m_myNick = savedNick;
+        theApp.m_iAutoPage = savedAutoPage;
     }
 
     CChatDoc* statusDocument = frame.CreateStatusWindow();
