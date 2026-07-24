@@ -154,20 +154,43 @@ CPageView::CPageView(CChatDoc* document, QWidget* parent)
 
 CPageView::~CPageView()
 {
+    theApp.SaveToReg(TRUE);
+    FreeRetainedPanelP();
     delete m_footerFont;
+    if (m_doc && m_doc->m_view == this)
+        m_doc->m_view = nullptr;
 }
 
 BOOL CPageView::OnPreparePrinting(QPrinter* printer) const
 {
-    return printer && m_doc && GetPhysicalPageCount(printer) > 0;
+    return printer && m_doc;
 }
 
-void CPageView::OnBeginPrinting(QPrinter*)
+void CPageView::FreeRetainedPanelP()
+{
+    delete m_printRetainedPanel;
+    m_printRetainedPanel = nullptr;
+}
+
+void CPageView::OnBeginPrinting(QPrinter* printer)
 {
     delete m_footerFont;
     m_footerFont = new QFont(theApp.m_comicsFont);
     m_footerFont->setPixelSize(FOOTERFONTHEIGHT);
     m_footerFont->setWeight(QFont::Normal);
+
+    // Modern creates one 24-bit retained panel from the printer DC here and
+    // reuses it until OnEndPrinting. RGB888 is the direct Qt storage adapter.
+    FreeRetainedPanelP();
+    if (printer) {
+        const int width = std::max(1, static_cast<int>(std::ceil(
+            CUnitPanelPage::m_unitWidth * printerDpiX(printer) / 1440.0)));
+        const int height = std::max(1, static_cast<int>(std::ceil(
+            CUnitPanelPage::m_unitHeight * printerDpiY(printer) / 1440.0)));
+        m_printRetainedPanel = new QImage(
+            width, height, QImage::Format_RGB888);
+        m_printRetainedPanel->fill(Qt::white);
+    }
     m_printPage = nullptr;
     m_printPhysicalPage = 0;
 }
@@ -251,7 +274,7 @@ void CPageView::OnPrint(QPrinter* printer, QPainter* painter,
     const QRectF pageRect = printer->pageRect(QPrinter::DevicePixel);
     const qreal dpiX = printerDpiX(printer);
     const qreal dpiY = printerDpiY(printer);
-    m_printPage->Draw(painter, m_printInfo, dpiX / 1440.0,
+    m_printPage->Draw(this, painter, m_printInfo, dpiX / 1440.0,
                       dpiY / 1440.0, pageRect.topLeft());
     PrintFooter(painter, pageRect, pageNumber, dpiX, dpiY);
 }
@@ -260,6 +283,7 @@ void CPageView::OnEndPrinting(QPrinter*)
 {
     delete m_footerFont;
     m_footerFont = nullptr;
+    FreeRetainedPanelP();
     m_printPage = nullptr;
     m_printPhysicalPage = 0;
     m_printInfo = {};
@@ -411,6 +435,11 @@ BOOL CPageView::AtBottom() const
     return verticalScrollBar()->value() == verticalScrollBar()->maximum()
         || (verticalScrollBar()->value() == 0
             && viewport()->height() >= verticalScrollBar()->maximum());
+}
+
+void CPageView::UpdateScroll()
+{
+    updateScrollRanges();
 }
 
 void CPageView::ScrollToBottom()

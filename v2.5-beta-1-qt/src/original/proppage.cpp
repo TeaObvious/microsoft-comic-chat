@@ -11,6 +11,7 @@
 #include "defines.h"
 #include "histent.h"
 #include "ircproto.h"
+#include "mainfrm.h"
 #include "originalassets.h"
 #include "pageview.h"
 #include "panel.h"
@@ -52,6 +53,7 @@
 #include <QTextEdit>
 #include <QTextCursor>
 #include <QVBoxLayout>
+#include <QtPrintSupport/QPrinterInfo>
 
 #include <algorithm>
 #include <cstring>
@@ -1264,6 +1266,17 @@ public:
     {
         setObjectName(QStringLiteral("CComicFontDialog"));
         setOption(QFontDialog::DontUseNativeDialog, true);
+        QPrinterInfo printerInfo;
+        if (theApp.m_pMainWnd && theApp.m_pMainWnd->GetPrinter())
+            printerInfo = QPrinterInfo(*theApp.m_pMainWnd->GetPrinter());
+        else
+            printerInfo = QPrinterInfo::defaultPrinter();
+        if (!printerInfo.isNull()) {
+            // Modern adds CF_SCALABLEONLY when its current application-printer
+            // settings yield a printer DC. ScalableFonts is the matching Qt
+            // filter; CF_BOTH/CF_WYSIWYG have no separate Qt option.
+            setOption(QFontDialog::ScalableFonts, true);
+        }
 
         auto* colorRow = new QWidget(this);
         colorRow->setObjectName(QStringLiteral("comicFontColorRow"));

@@ -35,10 +35,8 @@ CChildFrame::CChildFrame(CChatDoc* document, bool ownsDocument,
 
 CChildFrame::~CChildFrame()
 {
-    if (m_ownsDocument && m_document && !m_document->m_bStatusView
-        && m_document->m_proto) {
-        m_document->m_proto->ChatPartChannel(m_document, false);
-    }
+    if (m_ownsDocument && m_document && !m_document->IsCloseStarted())
+        m_document->OnCloseDocument();
     if (m_document) {
         m_document->m_client = nullptr;
         m_document->m_view = nullptr;
@@ -145,7 +143,28 @@ void CChildFrame::closeEvent(QCloseEvent* event)
         event->ignore();
         return;
     }
+    if (m_document && !m_document->IsCloseStarted()) {
+        if (!m_document->SaveModified(this)) {
+            event->ignore();
+            return;
+        }
+        m_document->OnCloseDocument();
+    }
     event->accept();
+}
+
+bool CChildFrame::event(QEvent* event)
+{
+    const bool result = QMdiSubWindow::event(event);
+    // QEvent::WindowActivate is delivered through QWidget::event(), not
+    // changeEvent(). Modern updates the global F1_MAXMDI bit from
+    // OnWindowPosChanged, which also runs on MDI activation.
+    if (event && event->type() == QEvent::WindowActivate) {
+        UpdateMaximizedFlag();
+        if (theApp.m_pMainWnd)
+            theApp.m_pMainWnd->UpdateVisibilityInfo();
+    }
+    return result;
 }
 
 void CChildFrame::hideEvent(QHideEvent* event)
@@ -186,12 +205,10 @@ void CChildFrame::showEvent(QShowEvent* event)
 void CChildFrame::changeEvent(QEvent* event)
 {
     QMdiSubWindow::changeEvent(event);
-    if (!event || event->type() != QEvent::WindowStateChange
-        || !m_bPositioned || !isVisible() || isMinimized()) {
+    if (!event || event->type() != QEvent::WindowStateChange) {
         return;
     }
-    if (isMaximized()) theApp.m_flags1 |= F1_MAXMDI;
-    else theApp.m_flags1 &= ~DWORD(F1_MAXMDI);
+    UpdateMaximizedFlag();
     if (theApp.m_pMainWnd)
         theApp.m_pMainWnd->UpdateVisibilityInfo();
 }
@@ -199,6 +216,7 @@ void CChildFrame::changeEvent(QEvent* event)
 void CChildFrame::moveEvent(QMoveEvent* event)
 {
     QMdiSubWindow::moveEvent(event);
+    UpdateMaximizedFlag();
     if (theApp.m_pMainWnd)
         theApp.m_pMainWnd->UpdateVisibilityInfo();
 }
@@ -206,10 +224,17 @@ void CChildFrame::moveEvent(QMoveEvent* event)
 void CChildFrame::resizeEvent(QResizeEvent* event)
 {
     QMdiSubWindow::resizeEvent(event);
-    if (m_bPositioned && isVisible() && !isMinimized()) {
-        if (isMaximized()) theApp.m_flags1 |= F1_MAXMDI;
-        else theApp.m_flags1 &= ~DWORD(F1_MAXMDI);
-    }
+    UpdateMaximizedFlag();
     if (theApp.m_pMainWnd)
         theApp.m_pMainWnd->UpdateVisibilityInfo();
+}
+
+void CChildFrame::UpdateMaximizedFlag()
+{
+    if (!m_bPositioned || theApp.m_pExitingDoc
+        || theApp.m_bEmbedded || !isVisible() || isMinimized()) {
+        return;
+    }
+    if (isMaximized()) theApp.m_flags1 |= F1_MAXMDI;
+    else theApp.m_flags1 &= ~DWORD(F1_MAXMDI);
 }

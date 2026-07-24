@@ -274,7 +274,12 @@ BOOL bKeyEventParam(QString& parameter, enumKeyEventParam key)
     case kepMyActivatedRoom:
     case kepMyInactivatedRooms: {
         CChatDoc* document = LookupDoc(parameter);
-        BOOL result = currentRoom && currentRoom->m_strChannel == parameter;
+        CChatDoc* exiting = theApp.m_pExitingDoc;
+        BOOL result =
+            (currentRoom && currentRoom->m_strChannel == parameter)
+            || (exiting && g_docs.contains(exiting) && exiting->m_proto
+                && exiting->m_proto->m_strChannel.compare(
+                       parameter, Qt::CaseInsensitive) == 0);
         if (key == kepMyInactivatedRooms) result = document && !result;
         return result;
     }

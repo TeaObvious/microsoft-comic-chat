@@ -25,6 +25,7 @@ extern BOOL g_bCXPrompt;
 extern BOOL g_bFreezeTabs;
 extern BOOL g_bEnterOnCreate;
 extern BOOL g_bCanViewUnrated;
+extern int g_iViewMode;
 
 BOOL ReplaceToken(QString& value, const QString& token,
                   const QString& replacement);
@@ -32,6 +33,13 @@ BOOL bReplaceMacroTokens(QString& message, BOOL in);
 bool ToggleSendComicsData();
 void SetSendComicsData(bool sendComicsData);
 bool GetSendComicsData();
+void ChatSetCXPrompt(BOOL prompt);
+BOOL GetCXPrompt();
+BOOL ChatInitialize(SHORT* keepServer = &g_nCXKeepServer,
+                    BOOL* prompt = &g_bCXPrompt);
+void InitializeServerConnection(CRoomInfo* enterInfo, BOOL* prompt);
+void AdjustViewMode();
+void OfflineEditInits();
 void SetArtDir(const char* artDir);
 BOOL ArtDirsOK();
 BOOL bCanViewUnrated(BOOL promptOverride = FALSE);

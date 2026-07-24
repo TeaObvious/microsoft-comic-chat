@@ -7,7 +7,9 @@
 #include "actions.h"
 #include "chat.h"
 #include "chatbars.h"
+#include "chatdoc.h"
 #include "defines.h"
+#include "intl.h"
 #include "ircproto.h"
 #include "mainfrm.h"
 #include "originalassets.h"
@@ -18,6 +20,8 @@
 
 #include <QComboBox>
 #include <QDialogButtonBox>
+#include <QDir>
+#include <QFileInfo>
 #include <QFormLayout>
 #include <QFontMetrics>
 #include <QFrame>
@@ -32,12 +36,29 @@
 #include <QShowEvent>
 #include <QStatusBar>
 #include <QTabWidget>
+#include <QTextStream>
 #include <QVBoxLayout>
 
 #include <array>
 #include <cstring>
 
+const char g_szCCCExt[] = "ccc";
+const char g_szRTFExt[] = "rtf";
+
 namespace {
+QStringList sourceNameFilters(const QString& sourceFilter)
+{
+    const QStringList fields =
+        sourceFilter.split(QLatin1Char('|'), Qt::KeepEmptyParts);
+    QStringList filters;
+    for (qsizetype index = 0; index + 1 < fields.size(); index += 2) {
+        if (fields.at(index).isEmpty() || fields.at(index + 1).isEmpty())
+            break;
+        filters.append(fields.at(index));
+    }
+    return filters;
+}
+
 const char* utf8Pointer(const QString& value, QByteArray& storage)
 {
     storage = value.toUtf8();
@@ -129,6 +150,233 @@ void LoadMacros(QSettings& settings)
     }
     settings.endGroup();
 }
+}
+
+CChatFileDialog::CChatFileDialog(
+    BOOL openFileDialog, const QString& defaultExtension,
+    const QString& initialPath, const QString& sourceFilter,
+    QWidget* parent)
+    : QFileDialog(parent)
+    , m_openFileDialog(openFileDialog)
+{
+    setObjectName(QStringLiteral("CChatFileDialog"));
+    setAcceptMode(openFileDialog ? QFileDialog::AcceptOpen
+                                 : QFileDialog::AcceptSave);
+    setFileMode(openFileDialog ? QFileDialog::ExistingFile
+                               : QFileDialog::AnyFile);
+    setDefaultSuffix(defaultExtension);
+    setNameFilters(sourceNameFilters(sourceFilter));
+    if (!initialPath.isEmpty()) {
+        const QFileInfo initial(initialPath);
+        // A title-only suggestion has no source-defined directory. Preserve
+        // QFileDialog's current/last-visited directory instead of resolving
+        // the relative title to the process CWD.
+        if (initial.isAbsolute()
+            || (!initial.path().isEmpty()
+                && initial.path() != QLatin1String("."))) {
+            setDirectory(initial.absolutePath());
+        }
+        selectFile(initial.fileName());
+    }
+    if (!openFileDialog && nameFilters().size() > 1) {
+        connect(this, &QFileDialog::filterSelected, this,
+                [this] { OnTypeChange(); });
+    }
+}
+
+void CChatFileDialog::SetFilterIndex(int index)
+{
+    const QStringList filters = nameFilters();
+    if (index < 1 || index > filters.size()) return;
+    selectNameFilter(filters.at(index - 1));
+}
+
+int CChatFileDialog::GetFilterIndex() const
+{
+    const int index = nameFilters().indexOf(selectedNameFilter());
+    return index < 0 ? 0 : index + 1;
+}
+
+void CChatFileDialog::OnTypeChange()
+{
+    if (m_openFileDialog) return;
+    QString extension;
+    switch (GetFilterIndex()) {
+    case 1:
+        extension = QString::fromLatin1(g_szRTFExt);
+        break;
+    case 2:
+        extension = QString::fromLatin1(g_szCCCExt);
+        break;
+    default:
+        return;
+    }
+
+    const QString selected = selectedFiles().value(0);
+    if (selected.isEmpty()) return;
+    const QFileInfo current(selected);
+    const QString base = current.completeBaseName().isEmpty()
+        ? current.fileName() : current.completeBaseName();
+    selectFile(QDir(current.absolutePath()).filePath(
+        base + QLatin1Char('.') + extension));
+}
+
+bool CChatDoc::ChatSaveLocator(QTextStream& stream) const
+{
+    stream << QStringLiteral("#CHATLOCATOR\r\n");
+    stream << QStringLiteral("IRCSERVER:\t")
+           << theApp.m_strConnectedService << QStringLiteral("\r\n");
+    stream << QStringLiteral("IRCCHANNEL:\t")
+           << (m_proto ? m_proto->m_strPrettyChannel : QString())
+           << QStringLiteral("\r\n");
+    stream << QStringLiteral("CXPROMPT:\t0\r\n");
+    return true;
+}
+
+namespace {
+constexpr qsizetype locatorValueLength = 256;
+
+bool locatorValue(const QString& line, QString& value)
+{
+    const qsizetype colon = line.indexOf(QLatin1Char(':'));
+    if (colon < 0) return false;
+    qsizetype first = colon + 1;
+    while (first < line.size() && line.at(first).isSpace()) ++first;
+    qsizetype last = line.size();
+    while (last > first && line.at(last - 1).isSpace()) --last;
+    // Modern underflows its input buffer for an empty value. That malformed
+    // case is unresolved, so it must not acquire a deterministic Qt value.
+    if (last == first) return false;
+    if (last - first >= locatorValueLength) return false;
+    value = line.mid(first, last - first);
+    return true;
+}
+
+void showLocatorMessage()
+{
+    QMessageBox box(
+        QMessageBox::Information,
+        originalResourceString(QStringLiteral("ID_MESSAGE_BOX_TITLE")),
+        originalResourceString(QStringLiteral("ID_ERR_NOT_CHATLOC")),
+        QMessageBox::Ok, theApp.m_pMainWnd.data());
+    box.setObjectName(QStringLiteral("ID_ERR_NOT_CHATLOC"));
+    box.exec();
+}
+}
+
+bool CChatDoc::ChatLoadLocator(QTextStream& stream, BOOL join,
+                               BOOL doException, SHORT* keepServer)
+{
+    Q_UNUSED(doException);
+    if (!keepServer || *keepServer < 0) return false;
+
+    const QString source = stream.readAll();
+    const qsizetype marker =
+        source.indexOf(QStringLiteral("#CHATLOCATOR"), 0,
+                       Qt::CaseSensitive);
+    if (marker < 0) {
+        showLocatorMessage();
+        return false;
+    }
+
+    qsizetype lineStart = source.indexOf(QLatin1Char('\n'), marker);
+    if (lineStart < 0) lineStart = source.size();
+    else ++lineStart;
+
+    CRoomInfo* defaultProtocol = GetDefaultProto();
+    const int status = defaultProtocol
+        ? defaultProtocol->GetConnectionStatus() : CX_DISCONNECTED;
+    const bool online = status == CX_INCHANNEL || status == CX_NOCHANNEL;
+    g_iViewMode = VM_UNSPECIFIED;
+
+    QString value;
+    const QStringList lines =
+        source.mid(lineStart).split(QLatin1Char('\n'), Qt::KeepEmptyParts);
+    for (QString line : lines) {
+        if (line.endsWith(QLatin1Char('\r'))) line.chop(1);
+        const QRegularExpressionMatch keyMatch =
+            QRegularExpression(QStringLiteral("^\\s*(\\S+)"))
+                .match(line);
+        if (!keyMatch.hasMatch()) break;
+        const QString key = keyMatch.captured(1);
+
+        if (key.compare(QStringLiteral("IRCSERVER:"),
+                        Qt::CaseInsensitive) == 0) {
+            if (locatorValue(line, value)) {
+                if (value.compare(QStringLiteral("localhost"),
+                                  Qt::CaseInsensitive) != 0) {
+                    QString service;
+                    theApp.m_listChatServices
+                        .GetServiceNameFromDisplayName(value, service);
+                    if (service.compare(theApp.m_strConnectedService,
+                                        Qt::CaseInsensitive) != 0
+                        || !online) {
+                        theApp.m_strConnectedService = service;
+                        *keepServer = 0;
+                    } else {
+                        *keepServer = 1;
+                    }
+                } else {
+                    *keepServer = 1;
+                }
+            }
+        } else if (key.compare(QStringLiteral("IRCCHANNEL:"),
+                               Qt::CaseInsensitive) == 0) {
+            if (locatorValue(line, value)) {
+                bInitEnterInfo(g_enterInfo, value, QString(), QString(),
+                               0L, TRUE);
+                theApp.m_myChannel = value;
+            }
+        } else if (key.compare(QStringLiteral("CXPROMPT:"),
+                               Qt::CaseInsensitive) == 0) {
+            if (locatorValue(line, value))
+                ChatSetCXPrompt(value.toInt() != 0);
+        } else if (key.compare(QStringLiteral("CHARACTER:"),
+                               Qt::CaseInsensitive) == 0) {
+            if (locatorValue(line, value))
+                theApp.m_myCharacterName = value;
+        } else if (key.compare(QStringLiteral("BACKDROP:"),
+                               Qt::CaseInsensitive) == 0) {
+            if (locatorValue(line, value))
+                theApp.m_lastBackDrop = line;
+        } else if (key.compare(QStringLiteral("COMICSDATA:"),
+                               Qt::CaseInsensitive) == 0) {
+            if (locatorValue(line, value))
+                SetSendComicsData(value.toInt() != 0);
+        } else if (key.compare(QStringLiteral("TITLE:"),
+                               Qt::CaseInsensitive) == 0) {
+            if (locatorValue(line, value) && !value.isEmpty()) {
+                if (CChatDoc* document = GetChatDoc())
+                    document->SetComicsTitle2(value);
+            }
+        } else if (key.compare(QStringLiteral("ARTDIR:"),
+                               Qt::CaseInsensitive) == 0) {
+            if (locatorValue(line, value) && !value.isEmpty()) {
+                const QByteArray artDir =
+                    IntlTextFromQString(QStringView(value));
+                SetArtDir(artDir.constData());
+            }
+        } else if (key.compare(QStringLiteral("VIEW:"),
+                               Qt::CaseInsensitive) == 0) {
+            if (locatorValue(line, value)) {
+                if (value.compare(QStringLiteral("Comics"),
+                                  Qt::CaseInsensitive) == 0) {
+                    g_iViewMode = VM_COMICS;
+                } else if (value.compare(QStringLiteral("Text"),
+                                         Qt::CaseInsensitive) == 0) {
+                    g_iViewMode = VM_TEXT;
+                }
+            }
+        }
+    }
+
+    if (join && *keepServer > 0) {
+        g_bEnterOnCreate = FALSE;
+        bSwitchToRoom(QString());
+        if (LookupDoc(g_enterInfo.m_strChannel)) return false;
+        ++*keepServer;
+    }
+    return true;
 }
 
 class CSetupPage final : public QWidget {
@@ -285,9 +533,12 @@ void CChatApp::InitVals()
     m_bSaveViewMode = true;
     m_bAway = false;
     m_bAwayPrompt = false;
+    m_bLoadURL = false;
     m_bInSearch = false;
     m_bListRegistered = false;
     m_bLoginNotifsShown = false;
+    m_bMainLoopReady = false;
+    m_bDocumentInitializeActive = false;
     m_pRoomList = nullptr;
     m_pUserList = nullptr;
     m_rectWhisper = QRect();

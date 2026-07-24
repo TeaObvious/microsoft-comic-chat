@@ -19,7 +19,6 @@
 #include <QSplitter>
 #include <QSplitterHandle>
 #include <QVBoxLayout>
-#include <QtPrintSupport/QAbstractPrintDialog>
 #include <QtPrintSupport/QPrintDialog>
 #include <QtPrintSupport/QPrinter>
 
@@ -274,16 +273,8 @@ BOOL CChatView::OnFilePrint(QPrinter* printer, BOOL direct)
     if (!printer || !OnPreparePrinting(printer)) return FALSE;
     if (m_doc) printer->setDocName(m_doc->GetTitle());
 
-    const int pageCount = GetPhysicalPageCount(printer);
-    if (pageCount <= 0) return FALSE;
     if (!direct) {
         QPrintDialog dialog(printer, this);
-        dialog.setMinMax(1, pageCount);
-        dialog.setFromTo(1, pageCount);
-        dialog.setOption(QAbstractPrintDialog::PrintPageRange,
-                         pageCount > 1);
-        dialog.setOption(QAbstractPrintDialog::PrintSelection, false);
-        dialog.setOption(QAbstractPrintDialog::PrintCurrentPage, false);
         if (dialog.exec() != QDialog::Accepted) return FALSE;
     }
     return Print(printer);

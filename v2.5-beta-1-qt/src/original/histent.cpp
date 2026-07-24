@@ -86,10 +86,9 @@ QString UnQuoteReturns(const QString& value)
         else if (escaped == QLatin1Char('t')) unquoted += QLatin1Char('\t');
         else if (escaped == QLatin1Char('\\')) unquoted += QLatin1Char('\\');
         else {
-            // Original keeps a malformed backslash and processes the following
-            // byte normally on its next loop iteration.
+            // The original keeps the backslash but discards the unknown
+            // escaped byte.
             unquoted += QLatin1Char('\\');
-            --index;
         }
     }
     return unquoted;
@@ -135,8 +134,7 @@ SayEntry::SayEntry(const QString& record, CChatDoc* document,
         m_pui = CIUserJoin(new CUserInfo(m_name));
     }
     ReadOtherArgs(recordFields.value(2), document);
-    QByteArray mutableMessage = bytes(UnQuoteReturns(recordFields.mid(3).join(
-        QLatin1Char('\t'))));
+    QByteArray mutableMessage = bytes(UnQuoteReturns(recordFields.value(3)));
     m_prgdwFormatting = new CDWordArray;
     char* controlLess = SzControlLess(mutableMessage.data(), m_prgdwFormatting);
     m_mesg = QString::fromUtf8(controlLess);
@@ -354,7 +352,8 @@ ChangeAvatarEntry::ChangeAvatarEntry(const QString& record)
     m_name = recordFields.value(1);
     m_avName = recordFields.value(2);
     if (!recordFields.value(3).isEmpty()) m_avURL = recordFields.value(3);
-    m_avID = 0;
+    if (CAvatarX* avatar = GetAvatar3(m_avName, nullptr))
+        m_avID = avatar->m_avatarID;
 }
 
 void UpdateMemberListIcon(CUserInfo* pui, CChatDoc* document)
@@ -419,7 +418,7 @@ GetInfoEntry::GetInfoEntry(const QString& record)
 {
     const QStringList recordFields = fields(record);
     m_name = recordFields.value(1);
-    m_info = recordFields.mid(2).join(QLatin1Char('\t'));
+    m_info = recordFields.value(2);
 }
 
 void GetInfoEntry::Execute(int, CChatDoc* document)
@@ -483,7 +482,7 @@ StartHistoryEntry::StartHistoryEntry(const QString& record)
     if (m_name.isEmpty())
         m_name = originalResourceString(QStringLiteral("IDS_DEFAULT_NICK"));
     m_avName = recordFields.value(2);
-    m_title = recordFields.mid(3).join(QLatin1Char('\t'));
+    m_title = recordFields.value(3);
 }
 
 void StartHistoryEntry::Execute(int, CChatDoc* document)

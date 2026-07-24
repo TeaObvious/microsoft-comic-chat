@@ -112,6 +112,7 @@ public:
     bool ChatSetMode(DWORD newMode, DWORD newMaxUsers,
                      const QString& newPassword) override;
     bool bChatShowMOTD() override;
+    int GetType() const override { return PC_IRC; }
     void HandleClientDataChange(const QString& newClientData);
     bool ChangeProperty(CUserInfo* puiSelf, const QString& property,
                         const QString* value) override;

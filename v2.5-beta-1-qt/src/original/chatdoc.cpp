@@ -27,9 +27,13 @@
 #include <QAction>
 #include <QApplication>
 #include <QClipboard>
+#include <QDialog>
+#include <QFile>
+#include <QFileInfo>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMimeData>
+#include <QRegularExpression>
 #include <QTextEdit>
 #include <QTextStream>
 #include <QTimer>
@@ -37,9 +41,46 @@
 #include <QtGlobal>
 
 #include <cstring>
+#include <utility>
 
 namespace {
 CChatDoc* g_doc = nullptr;
+
+void showDocumentMessage(const QString& resourceIdentifier,
+                         const QString& replacement = QString())
+{
+    QString message = originalResourceString(resourceIdentifier);
+    if (!replacement.isNull())
+        message.replace(QStringLiteral("%1"), replacement);
+    QMessageBox box(
+        QMessageBox::Information,
+        originalResourceString(QStringLiteral("ID_MESSAGE_BOX_TITLE")),
+        message, QMessageBox::Ok, theApp.m_pMainWnd.data());
+    box.setObjectName(resourceIdentifier);
+    box.exec();
+}
+
+bool hasConversationExtension(const QString& path, const char* extension)
+{
+    return path.right(3).compare(QString::fromLatin1(extension),
+                                 Qt::CaseInsensitive) == 0;
+}
+
+bool hasSelectedFileExtension(const QString& path, const char* extension)
+{
+    return QFileInfo(path).suffix().compare(
+               QString::fromLatin1(extension),
+               Qt::CaseInsensitive) == 0;
+}
+
+bool hasCompoundFileMagic(const QByteArray& bytes)
+{
+    static constexpr unsigned char magic[] = {
+        0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1
+    };
+    return bytes.size() >= static_cast<qsizetype>(sizeof(magic))
+        && std::memcmp(bytes.constData(), magic, sizeof(magic)) == 0;
+}
 }
 
 QList<CChatDoc*> g_docs;
@@ -56,10 +97,19 @@ CChatDoc::CChatDoc()
 
 CChatDoc::~CChatDoc()
 {
+    DeleteContents();
     const bool ownedCurrentRoom = currentRoom == m_proto;
     g_docs.removeOne(this);
-    if (g_doc == this) {
-        g_doc = g_docs.isEmpty() ? nullptr : g_docs.first();
+    CChatDoc* nextDocument = nullptr;
+    for (CChatDoc* document : std::as_const(g_docs)) {
+        if (document && !document->IsCloseStarted()) {
+            nextDocument = document;
+            break;
+        }
+    }
+    if (theApp.m_pDoc == this) theApp.m_pDoc = nextDocument;
+    if (g_doc == this || (g_doc && g_doc->IsCloseStarted())) {
+        g_doc = nextDocument;
         if (g_doc) g_doc->LoadDocData();
         else {
             currentRoom = nullptr;
@@ -76,9 +126,275 @@ CChatDoc::~CChatDoc()
     }
     delete m_proto;
     m_proto = nullptr;
+}
+
+int CChatDoc::FindFileType(const QString& pathName) const
+{
+    const QString extension = pathName.right(4);
+    if (extension.compare(QStringLiteral(".ccr"),
+                          Qt::CaseInsensitive) == 0) {
+        return FT_CCR;
+    }
+    if (extension.compare(QStringLiteral(".rtf"),
+                          Qt::CaseInsensitive) == 0) {
+        return FT_RTF;
+    }
+    return FT_CCC;
+}
+
+bool CChatDoc::OnNewDocument()
+{
+    if (m_bDocumentInitialized || !m_pages.isEmpty()
+        || !m_history.isEmpty() || !m_allChannelPuis.isEmpty()) {
+        DeleteContents();
+    }
+    m_bContentsDeleted = false;
+    m_bCloseStarted = false;
+    m_bDocumentInitialized = false;
+    m_bArchived = false;
+    m_bChatInitializeScheduled = false;
+    m_bChatInitializeComplete = false;
+    ++m_chatInitializeGeneration;
+    m_fileType = FT_CCR;
+    m_strPathName.clear();
+    InitMyDocument();
+    SetModifiedFlag(false);
+    return true;
+}
+
+bool CChatDoc::OnOpenDocument(const QString& pathName)
+{
+    m_fileType = static_cast<char>(FindFileType(pathName));
+    m_bChatInitializeScheduled = false;
+    m_bChatInitializeComplete = false;
+    ++m_chatInitializeGeneration;
+    DeleteContents();
+    m_bContentsDeleted = false;
+    m_bCloseStarted = false;
+    m_bDocumentInitialized = false;
+    m_bArchived = false;
+    InitMyDocument();
+
+    QFile file(pathName);
+    if (!file.open(QIODevice::ReadOnly)) return false;
+    const QByteArray bytes = file.readAll();
+    // Modern's normal CCC/CCR files are CFB because
+    // CDocObjectServerDoc enables compound storage. That COM/OLE container is
+    // deliberately deferred; never feed its raw sectors to the flat adapter.
+    if (hasCompoundFileMagic(bytes)) return false;
+
+    QString payload = IntlTextToQString(bytes.constData(), bytes.size());
+    QTextStream stream(&payload, QIODevice::ReadOnly);
+    bool loaded = false;
+    if (m_fileType == FT_CCR) {
+        loaded = ChatLoadLocator(stream, TRUE, TRUE, &g_nCXKeepServer);
+    } else if (payload.startsWith(
+                   QStringLiteral("#CHATCONVERSATION"),
+                   Qt::CaseInsensitive)) {
+        loaded = ChatLoadConversation(stream);
+    } else {
+        // Modern reaches this locator path only after its compound open has
+        // failed. Dispatching by the flat header avoids first reporting the
+        // same payload as a bad conversation.
+        loaded = ChatLoadLocator(stream, TRUE, FALSE, &g_nCXKeepServer);
+    }
+    if (!loaded) return false;
+
+    m_strPathName = QFileInfo(pathName).absoluteFilePath();
+    SetTitle(QFileInfo(pathName).fileName());
+    SetModifiedFlag(false);
+    return true;
+}
+
+bool CChatDoc::ParseLocatorFile(const QString& pathName)
+{
+    QFile file(pathName);
+    if (!file.open(QIODevice::ReadOnly)) return false;
+    const QByteArray bytes = file.readAll();
+    if (hasCompoundFileMagic(bytes)) return false;
+    QString payload = IntlTextToQString(bytes.constData(), bytes.size());
+    QTextStream stream(&payload, QIODevice::ReadOnly);
+    return ChatLoadLocator(stream, TRUE, FALSE, &g_nCXKeepServer);
+}
+
+bool CChatDoc::OnSaveDocument(const QString& pathName)
+{
+    m_fileType = static_cast<char>(FindFileType(pathName));
+    if (m_fileType == FT_RTF) {
+        if (!m_bComicView) {
+            if (m_textView && WriteRTF(m_textView->m_pRichEdit, pathName))
+                return true;
+            showDocumentMessage(QStringLiteral("ID_ERR_SAVE"), pathName);
+            return false;
+        }
+        showDocumentMessage(QStringLiteral("ID_RTF_NO_COMICS"));
+        return true;
+    }
+
+    QString payload;
+    QTextStream stream(&payload, QIODevice::WriteOnly);
+    if (m_fileType == FT_CCR) {
+        if (!ChatSaveLocator(stream)) return false;
+    } else {
+        ChatSaveConversation(stream);
+    }
+    stream.flush();
+    const QByteArray encoded = IntlTextFromQString(QStringView(payload));
+    QFile file(pathName);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return false;
+    return file.write(encoded) == encoded.size();
+}
+
+bool CChatDoc::DoSave(const QString& pathName, bool replace)
+{
+    QString newName = pathName;
+    const bool prompted = newName.isEmpty();
+    if (prompted) {
+        QString filter =
+            originalResourceString(QStringLiteral("IDS_CCC_FILTER"));
+        if (!m_bComicView) {
+            filter.prepend(
+                originalResourceString(QStringLiteral("IDS_RTF_FILTER")));
+        }
+
+        QString initial = m_strPathName;
+        if (initial.isEmpty()) initial = GetTitle();
+        if (!hasConversationExtension(initial, g_szCCCExt)
+            && !hasConversationExtension(initial, g_szRTFExt)) {
+            initial += QLatin1Char('.')
+                + QString::fromLatin1(m_bComicView
+                                         ? g_szCCCExt : g_szRTFExt);
+        }
+
+        CChatFileDialog dialog(
+            FALSE, QString::fromLatin1(g_szCCCExt), initial,
+            filter, theApp.m_pMainWnd.data());
+        dialog.SetFilterIndex(
+            !m_bComicView
+                && hasConversationExtension(initial, g_szCCCExt)
+            ? 2 : 1);
+        if (dialog.exec() != QDialog::Accepted) return false;
+        newName = dialog.selectedFiles().value(0);
+        if (!hasSelectedFileExtension(newName, g_szCCCExt)
+            && !hasSelectedFileExtension(newName, g_szRTFExt)) {
+            newName += QLatin1Char('.')
+                + QString::fromLatin1(g_szCCCExt);
+        }
+    }
+
+    if (!OnSaveDocument(newName)) {
+        if (prompted) QFile::remove(newName);
+        return false;
+    }
+
+    if (replace) {
+        const bool keepTitle = m_proto
+            && m_proto->m_strChannel != QStringLiteral(": :");
+        const QString oldTitle = GetTitle();
+        m_strPathName = QFileInfo(newName).absoluteFilePath();
+        SetTitle(QFileInfo(newName).fileName());
+        if (keepTitle) SetTitle(oldTitle);
+        if (!theApp.m_bEmbedded) SetModifiedFlag(false);
+    }
+    return true;
+}
+
+bool CChatDoc::SaveModified(QWidget* parent)
+{
+    if (!IsModified()) return true;
+
+    QMessageBox prompt(
+        QMessageBox::Warning,
+        originalResourceString(QStringLiteral("AFX_IDS_APP_TITLE")),
+        GetTitle(),
+        QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel,
+        parent ? parent : theApp.m_pMainWnd.data());
+    prompt.setObjectName(QStringLiteral("CChatDocSaveModified"));
+    prompt.setDefaultButton(QMessageBox::Save);
+    prompt.setEscapeButton(QMessageBox::Cancel);
+    const int answer = prompt.exec();
+    if (answer == QMessageBox::Cancel) return false;
+    if (answer == QMessageBox::Discard) return true;
+    if (answer != QMessageBox::Save) return false;
+    return DoSave(m_strPathName, true);
+}
+
+void CChatDoc::DeleteContents()
+{
+    if (m_bContentsDeleted) return;
+    m_bContentsDeleted = true;
+
     DestroyPages();
+    if (!m_bComicView && m_textView) m_textView->ClearTextView();
+    if (m_bComicView && m_view) m_view->ResetExistingPanels(FALSE);
     DestroyHistory();
+    if (m_proto) m_proto->ChatPartChannel(this, FALSE);
+    ChatEmptyMemberList(this);
     DestroyUserState();
+    m_comicsTitle.clear();
+    m_bDocumentInitialized = false;
+}
+
+void CChatDoc::OnCloseDocument()
+{
+    if (m_bCloseStarted) return;
+    m_bCloseStarted = true;
+    theApp.m_pExitingDoc = this;
+    if (theApp.m_bEmbedded) {
+        if (m_proto) m_proto->ChatPartChannel(this, FALSE);
+        return;
+    }
+    DeleteContents();
+}
+
+void CChatDoc::SaveShortcut(const QString& pathName)
+{
+    DoSave(pathName, false);
+}
+
+void CChatDoc::SetLegalPath(const QString& roomName, BOOL addToMRU)
+{
+    Q_UNUSED(addToMRU);
+    QString legal = roomName;
+    static const QString invalid = QStringLiteral("\\/:*?\"<>|.");
+    for (const QChar character : invalid)
+        legal.replace(character, QLatin1Char('%'));
+    const bool replaced = legal != roomName;
+    m_strPathName = legal;
+    SetTitle(legal);
+    if (replaced) SetTitle(roomName);
+}
+
+bool CChatDoc::CleanupExistingWindows()
+{
+    CChatDoc* reuse = nullptr;
+    const QList<CChatDoc*> documents = g_docs;
+    for (CChatDoc* document : documents) {
+        if (!document || document->IsCloseStarted()
+            || !document->m_proto
+            || document->m_proto->GetType() != PC_IRC
+            || document->m_bStatusView) {
+            continue;
+        }
+        if (!reuse) {
+            reuse = document;
+            continue;
+        }
+        if (!document->SaveModified(theApp.m_pMainWnd.data()))
+            return false;
+        document->OnCloseDocument();
+        if (theApp.m_pMainWnd)
+            theApp.m_pMainWnd->CloseDocument(document);
+    }
+
+    if (reuse) {
+        if (!reuse->SaveModified(theApp.m_pMainWnd.data()))
+            return false;
+        reuse->OnNewDocument();
+        if (reuse->m_proto) reuse->m_proto->m_strChannel.clear();
+    }
+    return true;
 }
 
 CUserInfo* CChatDoc::GetNextSelectedMember(int& index) const
@@ -474,6 +790,16 @@ BOOL CChatDoc::OnUpdateFilePrint() const
     return TRUE;
 }
 
+BOOL CChatDoc::OnUpdateFileSave() const
+{
+    return TRUE;
+}
+
+BOOL CChatDoc::OnUpdateFileSaveAs() const
+{
+    return TRUE;
+}
+
 BOOL CChatDoc::OnUpdateLeave() const
 {
     return GetConnectionStatus() == CX_INCHANNEL;
@@ -487,6 +813,12 @@ ConnectionStatus CChatDoc::GetConnectionStatus() const
 void CChatDoc::SetComicsTitle(const QString& title)
 {
     m_comicsTitle = title;
+}
+
+void CChatDoc::SetComicsTitle2(const QString& title)
+{
+    m_comicsTitle = title;
+    if (m_bComicView && m_view) m_view->ResetExistingPanels(TRUE);
 }
 
 void CChatDoc::SetTitle(const QString& title)
@@ -505,6 +837,7 @@ QString CChatDoc::GetComicsTitle()
 void CChatDoc::InitMyDocument()
 {
     if (m_bDocumentInitialized) return;
+    m_bContentsDeleted = false;
     m_bDocumentInitialized = true;
     const QByteArray defaultArtDirectory = theApp.m_strDefaultArtDir.toLocal8Bit();
     SetArtDir(defaultArtDirectory.constData());
@@ -740,6 +1073,7 @@ bool CChatDoc::ChatLoadConversation(QTextStream& stream)
     const QString firstLine = stream.readLine();
     if (!firstLine.startsWith(QStringLiteral("#CHATCONVERSATION"),
                               Qt::CaseInsensitive)) {
+        showDocumentMessage(QStringLiteral("ID_ERR_NOT_CHATCONV"));
         return false;
     }
 
@@ -747,8 +1081,11 @@ bool CChatDoc::ChatLoadConversation(QTextStream& stream)
     theApp.m_bNoRefresh = true;
     while (!stream.atEnd()) {
         const QString record = stream.readLine();
-        if (record.isEmpty()) continue;
-        const QString keyword = record.section(QLatin1Char('\t'), 0, 0);
+        const QRegularExpressionMatch keywordMatch =
+            QRegularExpression(QStringLiteral("^\\s*(\\S+)"))
+                .match(record);
+        if (!keywordMatch.hasMatch()) continue;
+        const QString keyword = keywordMatch.captured(1);
         if (keyword.compare(QStringLiteral("say"), Qt::CaseInsensitive) == 0)
             AddAndExecute(new SayEntry(record, this), this);
         else if (keyword.compare(QStringLiteral("join"), Qt::CaseInsensitive) == 0
@@ -768,8 +1105,9 @@ bool CChatDoc::ChatLoadConversation(QTextStream& stream)
             AddAndExecute(new ChangeBackDropEntry(record, true), this);
         else if (keyword.compare(QStringLiteral("starthistory"), Qt::CaseInsensitive) == 0)
             AddAndExecute(new StartHistoryEntry(record), this);
-        // The original reports ID_ERR_BAD_CONV_FIELD and continues. A Qt
-        // dialog is deliberately not invented at this non-UI parser boundary.
+        else
+            showDocumentMessage(
+                QStringLiteral("ID_ERR_BAD_CONV_FIELD"), keyword);
     }
 
     if (!m_puiSelf) {
@@ -780,6 +1118,12 @@ bool CChatDoc::ChatLoadConversation(QTextStream& stream)
         SetModifiedFlag(false);
     }
     theApp.m_bNoRefresh = oldRefresh;
+    if (m_bComicView && m_view) {
+        m_view->UpdateScroll();
+        m_view->viewport()->update();
+    } else if (m_textView) {
+        m_textView->show();
+    }
     SetModifiedFlag(false);
     if (m_proto) m_proto->m_strChannel = QStringLiteral(": :");
     return true;
@@ -949,6 +1293,7 @@ void CChatDoc::OnViewComics()
         return;
     }
 
+    m_fileType = FT_CCC;
     MapNullAvatars(this);
     if (m_client) m_client->CreateComicView(true);
     UpdateComicCharacterMenu();
@@ -981,6 +1326,7 @@ void CChatDoc::OnViewText()
     if (!m_bComicView) return;
     theApp.m_bComicView = false;
     m_bComicView = false;
+    m_fileType = FT_CCC;
     if (m_client) m_client->CreateTextView(true);
     UpdateComicCharacterMenu();
 }
@@ -1191,7 +1537,7 @@ void SetChatDoc(CChatDoc* doc)
 CChatDoc* LookupDoc(const QString& channel)
 {
     for (CChatDoc* document : g_docs) {
-        if (document && document->m_proto
+        if (document && !document->IsCloseStarted() && document->m_proto
             && document->m_proto->m_strChannel.compare(
                    channel, Qt::CaseInsensitive) == 0) {
             return document;

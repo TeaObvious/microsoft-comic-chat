@@ -518,9 +518,6 @@ int main(int argc, char** argv)
             ++sourceOccurrences[command];
 
         const QSet<QString> deferredCommands = {
-            QStringLiteral("ID_FILE_OPEN"),
-            QStringLiteral("ID_FILE_SAVE"),
-            QStringLiteral("ID_FILE_SAVE_AS"),
             QStringLiteral("ID_FILE_CREATESHORTCUT"),
             QStringLiteral("ID_FAVORITES_ADDTOFAVORITES"),
             QStringLiteral("ID_FAVORITES_OPENFAVORITES"),
@@ -551,6 +548,29 @@ int main(int argc, char** argv)
                         && action->isEnabled())) {
                     qWarning() << "command classification"
                                << iterator.key()
+                               << action->property(
+                                      "originalCommandClass")
+                                      .toString()
+                               << action->isEnabled();
+                    return EXIT_FAILURE;
+                }
+            }
+        }
+        for (const QString& command : {
+                 QStringLiteral("ID_FILE_OPEN"),
+                 QStringLiteral("ID_FILE_SAVE"),
+                 QStringLiteral("ID_FILE_SAVE_AS")}) {
+            const QList<QAction*> actions =
+                registeredCommandActions(&frame, command);
+            if (actions.isEmpty()) {
+                qWarning() << "missing active file command" << command;
+                return EXIT_FAILURE;
+            }
+            for (QAction* action : actions) {
+                if (action->property("originalCommandClass").toString()
+                        != QLatin1String("active")
+                    || !action->isEnabled()) {
+                    qWarning() << "inactive file command" << command
                                << action->property(
                                       "originalCommandClass")
                                       .toString()

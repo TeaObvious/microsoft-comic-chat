@@ -20,6 +20,7 @@ class QPoint;
 class QPainter;
 class QPrinter;
 class QTextDocument;
+class QTextEdit;
 
 class CTextView;
 
@@ -90,3 +91,4 @@ void InitializeTextCore(CTextCore* textCore, BOOL resetOld = FALSE,
                         BOOL resetSay = FALSE);
 void InitializeTextCores(BOOL resetOld, BOOL resetSay = FALSE);
 CTextView* GetTextView();
+BOOL WriteRTF(QTextEdit* richEdit, const QString& fileName);

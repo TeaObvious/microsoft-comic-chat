@@ -18,6 +18,7 @@ class CCoolToolBarEx;
 class CChatView;
 class CChildFrame;
 class CTabBar;
+class QCloseEvent;
 class QLabel;
 class QEvent;
 class QMenu;
@@ -41,12 +42,13 @@ public:
     CTabBar* GetTabBar() const { return m_wndTabBar; }
     QMdiArea* GetMDIArea() const { return m_mdiArea; }
     CChatDoc* GetActiveDocument() const { return m_doc; }
+    QPrinter* GetPrinter() const { return m_printer.get(); }
     CChatDoc* CreateNewDocument();
     CChatDoc* CreateStatusWindow();
     CChildFrame* AddDocument(CChatDoc* document, bool ownsDocument,
                              bool activate = true);
     void ActivateDocument(CChatDoc* document);
-    void CloseDocument(CChatDoc* document);
+    bool CloseDocument(CChatDoc* document);
     void UpdateDocumentTitle(CChatDoc* document, const QString& title);
     void ShowStatusWindow(bool show, bool activate = true);
     void AutoArrangeWindows();
@@ -95,6 +97,7 @@ private:
     QString NextUntitledTitle();
 
 protected:
+    void closeEvent(QCloseEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
 
@@ -122,6 +125,7 @@ private:
     QString m_statusPaneStrings[2];
     int m_nextUntitled = 1;
     bool m_destroying = false;
+    bool m_closingAccepted = false;
     bool m_uiUpdatePending = false;
     std::unique_ptr<QPrinter> m_printer;
 };

@@ -7,6 +7,8 @@
 
 #include <QCoreApplication>
 #include <QHostInfo>
+#include <QProcess>
+#include <QProcessEnvironment>
 
 #include <cstdio>
 #include <cstdlib>
@@ -37,6 +39,24 @@ int main(int argc, char** argv)
 {
     QCoreApplication application(argc, argv);
     theApp.InitVals();
+
+#ifndef QT_NO_DEBUG
+    if (qEnvironmentVariableIsSet(
+            "COMIC_CHAT_TEST_EMPTY_JOIN_ASSERT")) {
+        QString fileName;
+        BOOL fileNew = FALSE;
+        REQUIRE(theApp.ProcessShellCommand(
+            QStringLiteral("irc://irc.example/"),
+            &fileName, &fileNew));
+        REQUIRE(fileNew);
+        REQUIRE(fileName.isEmpty());
+        REQUIRE(theApp.m_bLoadURL);
+        CapturingIrcProto assertionProtocol;
+        assertionProtocol.OnLogin();
+        return EXIT_SUCCESS;
+    }
+#endif
+
     REQUIRE(theApp.m_rulesData.bInitAlloc());
     REQUIRE(theApp.m_rulesData.bLoadStrings());
 
@@ -68,6 +88,52 @@ int main(int argc, char** argv)
     REQUIRE(protocol.sent == expected
         + QStringLiteral("MODE %1 +i\r\nMODE %1 -i\r\n")
               .arg(theApp.m_myNick).toUtf8());
+
+    protocol.sent.clear();
+    theApp.m_iOnConnectAction = CA_NOACTION;
+    theApp.m_bLoadURL = true;
+    g_enterInfo.m_strChannel = QStringLiteral("#UrlRoom");
+    g_enterInfo.m_strPassword = QStringLiteral("secret");
+    protocol.OnLogin();
+    REQUIRE(protocol.sent.contains(
+        QByteArray("JOIN #UrlRoom secret\r\n")));
+    REQUIRE(!theApp.m_bLoadURL);
+    protocol.sent.clear();
+    protocol.OnLogin();
+    REQUIRE(!protocol.sent.contains(QByteArray("JOIN ")));
+
+#ifdef QT_NO_DEBUG
+    protocol.sent.clear();
+    QString emptyUrlFileName;
+    BOOL emptyUrlFileNew = FALSE;
+    REQUIRE(theApp.ProcessShellCommand(
+        QStringLiteral("irc://irc.example/"),
+        &emptyUrlFileName, &emptyUrlFileNew));
+    REQUIRE(emptyUrlFileNew);
+    REQUIRE(emptyUrlFileName.isEmpty());
+    REQUIRE(g_enterInfo.m_strChannel.isEmpty());
+    REQUIRE(g_enterInfo.m_strPassword.isEmpty());
+    REQUIRE(theApp.m_bLoadURL);
+    protocol.OnLogin();
+    REQUIRE(protocol.sent
+            == QStringLiteral("MODE %1 -i\r\nJOIN \r\n")
+                   .arg(theApp.m_myNick).toUtf8());
+    REQUIRE(!theApp.m_bLoadURL);
+#else
+    QProcess assertionProcess;
+    QProcessEnvironment assertionEnvironment =
+        QProcessEnvironment::systemEnvironment();
+    assertionEnvironment.insert(
+        QStringLiteral("COMIC_CHAT_TEST_EMPTY_JOIN_ASSERT"),
+        QStringLiteral("1"));
+    assertionProcess.setProcessEnvironment(assertionEnvironment);
+    assertionProcess.start(
+        QCoreApplication::applicationFilePath(),
+        {QStringLiteral("original-irc-login")});
+    REQUIRE(assertionProcess.waitForFinished());
+    REQUIRE(assertionProcess.exitStatus() == QProcess::CrashExit);
+#endif
+
     REQUIRE(CommunicationInits());
 
     const auto ruleSetName = [](const QString& resource) {

@@ -920,12 +920,14 @@ int CUnitPanelPage::GetPhysicalPageCount(const SIZE& pageSize) const
         static_cast<double>(m_panels.size()) / panelsPerPage));
 }
 
-void CUnitPanelPage::Draw(QPainter* painter,
+void CUnitPanelPage::Draw(CPageView* view, QPainter* painter,
                           const CUnitPanelPrintInfo& printInfo,
                           qreal pixelsPerTwipX, qreal pixelsPerTwipY,
                           const QPointF& pageOrigin)
 {
-    if (!painter || !painter->isActive()
+    QImage* retained = view ? view->GetPrintRetainedPanel() : nullptr;
+    if (!painter || !painter->isActive() || !retained
+        || retained->isNull()
         || printInfo.m_panelsWide <= 0
         || printInfo.m_panelsHigh <= 0
         || pixelsPerTwipX <= 0.0 || pixelsPerTwipY <= 0.0) {
@@ -942,10 +944,6 @@ void CUnitPanelPage::Draw(QPainter* painter,
     painter->save();
     painter->setClipRect(clip.normalized(), Qt::IntersectClip);
 
-    const int panelPixelWidth = std::max(
-        1, static_cast<int>(std::ceil(m_unitWidth * pixelsPerTwipX)));
-    const int panelPixelHeight = std::max(
-        1, static_cast<int>(std::ceil(m_unitHeight * pixelsPerTwipY)));
     const int firstPanel = printInfo.m_firstPanel;
     const int panelLimit = std::min(
         static_cast<int>(m_panels.size()), firstPanel
@@ -966,13 +964,11 @@ void CUnitPanelPage::Draw(QPainter* painter,
             m_unitHeight * pixelsPerTwipY);
         if (!target.intersects(clip)) continue;
 
-        QImage retained(panelPixelWidth, panelPixelHeight,
-                        QImage::Format_RGB32);
-        retained.fill(Qt::white);
-        QtPaintDC dc(&retained, m_unitWidth, m_unitHeight, true);
+        retained->fill(Qt::white);
+        QtPaintDC dc(retained, m_unitWidth, m_unitHeight, true);
         RECT damage{0, 0, m_unitWidth, -m_unitHeight};
         m_panels[panelIndex]->Draw(&dc, nullptr, &damage);
-        painter->drawImage(target, retained);
+        painter->drawImage(target, *retained);
     }
     painter->restore();
 }

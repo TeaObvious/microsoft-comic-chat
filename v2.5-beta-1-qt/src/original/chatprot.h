@@ -97,6 +97,7 @@ public:
                                      unsigned short modes,
                                      bool invokedByWhisperBox = false);
     virtual bool IsIRCX() const { return false; }
+    virtual int GetType() const { return 0; }
     virtual void UpdateStatus();
     virtual void SetConnectionStatus(ConnectionStatus status) { m_status = status; }
     virtual ConnectionStatus GetConnectionStatus() const { return m_status; }

@@ -28,6 +28,7 @@ public:
     bool m_bPositioned = false;
 
 protected:
+    bool event(QEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
     void changeEvent(QEvent* event) override;
     void hideEvent(QHideEvent* event) override;
@@ -36,6 +37,8 @@ protected:
     void showEvent(QShowEvent* event) override;
 
 private:
+    void UpdateMaximizedFlag();
+
     CChatDoc* m_document = nullptr;
     CChatView* m_view = nullptr;
     bool m_ownsDocument = false;

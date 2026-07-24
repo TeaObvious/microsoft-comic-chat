@@ -18,6 +18,7 @@ class QContextMenuEvent;
 class QKeyEvent;
 class QMouseEvent;
 class QFont;
+class QImage;
 class QPainter;
 class QPrinter;
 
@@ -35,6 +36,7 @@ public:
     int GetProspectivePanelWidth(int wide) const;
     int FitPanelsWide() const;
     BOOL AtBottom() const;
+    void UpdateScroll();
     void ScrollToBottom();
     unsigned int FindAvatarUnderPoint(POINT point);
     void* FindLabelUnderPoint(POINT point, POINT& panelPoint,
@@ -47,6 +49,8 @@ public:
     void PrintFooter(QPainter* painter, const QRectF& pageRect,
                      UINT pageNumber, qreal dpiX, qreal dpiY) const;
     int GetPhysicalPageCount(QPrinter* printer) const;
+    QImage* GetPrintRetainedPanel() const { return m_printRetainedPanel; }
+    void FreeRetainedPanelP();
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -71,6 +75,7 @@ private:
     BOOL m_bAutoFitting = FALSE;
     BOOL m_bAutoFitPending = FALSE;
     QFont* m_footerFont = nullptr;
+    QImage* m_printRetainedPanel = nullptr;
     CPage* m_printPage = nullptr;
     CUnitPanelPrintInfo m_printInfo;
     SIZE m_printPageSize{};

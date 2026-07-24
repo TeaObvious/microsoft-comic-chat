@@ -1,18 +1,33 @@
 #include "avatar.h"
 #include "backdrop.h"
+#include "actions.h"
 #include "chat.h"
 #include "chatdoc.h"
+#include "childfrm.h"
+#include "ircproto.h"
 #include "mainfrm.h"
 #include "originalassets.h"
+#include "pageview.h"
 #include "panel.h"
 #include "protsupp.h"
 #include "resource.h"
+#include "setupdlg.h"
+#include "tabbar.h"
+#include "textview.h"
 
 #include <QApplication>
+#include <QCoreApplication>
+#include <QDir>
+#include <QEvent>
+#include <QFile>
+#include <QMessageBox>
+#include <QMdiArea>
+#include <QPointer>
 #include <QSettings>
 #include <QStatusBar>
 #include <QTemporaryDir>
 #include <QTextEdit>
+#include <QTimer>
 
 #include "textcore.h"
 
@@ -43,6 +58,92 @@ QString settingsRoot()
 QString key(const QString& name)
 {
     return settingsRoot() + QLatin1Char('/') + name;
+}
+
+class CountingIrcProto final : public CIrcProto {
+public:
+    explicit CountingIrcProto(int* partCount)
+        : m_partCount(partCount)
+    {
+    }
+
+    void ChatPartChannel(CChatDoc*, bool) override
+    {
+        if (m_partCount) ++*m_partCount;
+    }
+
+private:
+    int* m_partCount = nullptr;
+};
+
+class NonIrcProto final : public CIrcProto {
+public:
+    int GetType() const override { return PC_NM; }
+};
+
+class EnterInfoState {
+public:
+    EnterInfoState()
+        : m_channel(g_enterInfo.m_strChannel)
+        , m_prettyChannel(g_enterInfo.m_strPrettyChannel)
+        , m_password(g_enterInfo.m_strPassword)
+        , m_creationModes(g_enterInfo.m_strCreationModes)
+        , m_topic(g_enterInfo.m_strTopic)
+        , m_formatting(CopyFormatting(
+              g_enterInfo.m_prgdwTopicFormatting))
+        , m_modes(g_enterInfo.m_dwModes)
+        , m_maximumUsers(g_enterInfo.m_dwMaxUsers)
+        , m_setMode(g_enterInfo.m_bSetMode)
+        , m_document(g_enterInfo.m_doc)
+    {
+    }
+
+    ~EnterInfoState()
+    {
+        g_enterInfo.m_strChannel = m_channel;
+        g_enterInfo.m_strPrettyChannel = m_prettyChannel;
+        g_enterInfo.m_strPassword = m_password;
+        g_enterInfo.m_strCreationModes = m_creationModes;
+        g_enterInfo.m_strTopic = m_topic;
+        FreeAndNullFormatting(&g_enterInfo.m_prgdwTopicFormatting);
+        g_enterInfo.m_prgdwTopicFormatting = m_formatting;
+        m_formatting = nullptr;
+        g_enterInfo.m_dwModes = m_modes;
+        g_enterInfo.m_dwMaxUsers = m_maximumUsers;
+        g_enterInfo.m_bSetMode = m_setMode;
+        g_enterInfo.m_doc = m_document;
+    }
+
+    EnterInfoState(const EnterInfoState&) = delete;
+    EnterInfoState& operator=(const EnterInfoState&) = delete;
+
+private:
+    QString m_channel;
+    QString m_prettyChannel;
+    QString m_password;
+    QString m_creationModes;
+    QString m_topic;
+    CDWordArray* m_formatting = nullptr;
+    unsigned long m_modes = 0;
+    unsigned long m_maximumUsers = 0;
+    bool m_setMode = false;
+    CChatDoc* m_document = nullptr;
+};
+
+void answerNextMessage(QMessageBox::StandardButton answer,
+                       bool* observed,
+                       const QString& objectName =
+                           QStringLiteral("CChatDocSaveModified"))
+{
+    QTimer::singleShot(0, [answer, observed, objectName] {
+        auto* message = qobject_cast<QMessageBox*>(
+            QApplication::activeModalWidget());
+        REQUIRE(message != nullptr);
+        if (!objectName.isEmpty())
+            REQUIRE(message->objectName() == objectName);
+        if (observed) *observed = true;
+        message->done(answer);
+    });
 }
 }
 
@@ -208,8 +309,185 @@ int main(int argc, char** argv)
         REQUIRE(stored.value(key(QStringLiteral("XFrame"))).toInt() == shortX);
         REQUIRE(stored.value(key(QStringLiteral("ToolBarState"))).toByteArray()
                 == shortToolbarState);
+
+        // Both canonical primary-view destructors perform the short registry
+        // save. Modern also detaches the document's raw view pointer before
+        // the document can run DeleteContents during later teardown.
+        frame.move(frame.x() + 7, frame.y() + 7);
+        application.processEvents();
+        const QRect pageShortGeometry = frame.normalGeometry().isValid()
+            ? frame.normalGeometry() : frame.geometry();
+        {
+            CChatDoc detachedViewDocument;
+            {
+                CPageView detachedView(&detachedViewDocument, nullptr);
+                detachedViewDocument.m_view = &detachedView;
+            }
+            REQUIRE(detachedViewDocument.m_view == nullptr);
+        }
+        stored.sync();
+        REQUIRE(stored.value(key(QStringLiteral("XFrame"))).toInt()
+                == pageShortGeometry.x());
+
+        frame.move(frame.x() + 9, frame.y() + 9);
+        application.processEvents();
+        const QRect textShortGeometry = frame.normalGeometry().isValid()
+            ? frame.normalGeometry() : frame.geometry();
+        {
+            CChatDoc detachedTextDocument;
+            {
+                CTextView detachedTextView(
+                    &detachedTextDocument, nullptr);
+                detachedTextDocument.m_textView =
+                    &detachedTextView;
+            }
+            REQUIRE(detachedTextDocument.m_textView == nullptr);
+        }
+        stored.sync();
+        REQUIRE(stored.value(key(QStringLiteral("XFrame"))).toInt()
+                == textShortGeometry.x());
+
+        stored.beginGroup(settingsRoot());
+        QStringList keysBeforeChildState = stored.childKeys();
+        stored.endGroup();
+        keysBeforeChildState.sort();
+
+        const DWORD savedFlags1 = theApp.m_flags1;
+        const bool savedEmbedded = theApp.m_bEmbedded;
+        int partCount = 0;
+        auto* lifecycleDocument = new CChatDoc;
+        lifecycleDocument->m_bComicView = false;
+        delete lifecycleDocument->m_proto;
+        auto* lifecycleProtocol = new CountingIrcProto(&partCount);
+        lifecycleProtocol->m_doc = lifecycleDocument;
+        lifecycleProtocol->m_strChannel = QStringLiteral("#lifecycle");
+        lifecycleDocument->m_proto = lifecycleProtocol;
+        REQUIRE(lifecycleDocument->OnNewDocument());
+        CChildFrame* lifecycleFrame =
+            frame.AddDocument(lifecycleDocument, true, true);
+        REQUIRE(lifecycleFrame != nullptr);
+        application.processEvents();
+
+        // F1_MAXMDI is one global bit. Only a positioned, visible,
+        // non-minimized, non-exiting, non-embedded child may update it.
+        theApp.m_pExitingDoc = lifecycleDocument;
+        lifecycleFrame->showNormal();
+        application.processEvents();
+        theApp.m_pExitingDoc = nullptr;
+        theApp.m_flags1 &= ~DWORD(F1_MAXMDI);
+        lifecycleFrame->showMaximized();
+        application.processEvents();
+        REQUIRE(theApp.m_flags1 & F1_MAXMDI);
+        lifecycleFrame->showMinimized();
+        application.processEvents();
+        REQUIRE(theApp.m_flags1 & F1_MAXMDI);
+
+        theApp.m_pExitingDoc = lifecycleDocument;
+        lifecycleFrame->showNormal();
+        application.processEvents();
+        REQUIRE(theApp.m_flags1 & F1_MAXMDI);
+        theApp.m_pExitingDoc = nullptr;
+
+        lifecycleFrame->showMaximized();
+        application.processEvents();
+        REQUIRE(theApp.m_flags1 & F1_MAXMDI);
+        theApp.m_flags1 &= ~DWORD(F1_MAXMDI);
+        QEvent maximizedActivation(QEvent::WindowActivate);
+        QCoreApplication::sendEvent(
+            lifecycleFrame, &maximizedActivation);
+        REQUIRE(theApp.m_flags1 & F1_MAXMDI);
+        lifecycleFrame->showNormal();
+        application.processEvents();
+        REQUIRE(!(theApp.m_flags1 & F1_MAXMDI));
+        theApp.m_flags1 |= F1_MAXMDI;
+        QEvent restoredActivation(QEvent::WindowActivate);
+        QCoreApplication::sendEvent(
+            lifecycleFrame, &restoredActivation);
+        REQUIRE(!(theApp.m_flags1 & F1_MAXMDI));
+        theApp.m_flags1 |= F1_MAXMDI;
+        lifecycleFrame->move(lifecycleFrame->pos() + QPoint(3, 2));
+        application.processEvents();
+        REQUIRE(!(theApp.m_flags1 & F1_MAXMDI));
+
+        theApp.m_flags1 &= ~DWORD(F1_MAXMDI);
+        theApp.m_bEmbedded = true;
+        lifecycleFrame->showMaximized();
+        application.processEvents();
+        REQUIRE(!(theApp.m_flags1 & F1_MAXMDI));
+        theApp.m_bEmbedded = false;
+
+        theApp.m_flags1 |= F1_MAXMDI;
+        lifecycleFrame->hide();
+        application.processEvents();
+        REQUIRE(theApp.m_flags1 & F1_MAXMDI);
+
+        const DWORD roundTripFlags1 = savedFlags1 | F1_MAXMDI;
+        const bool savedSaveViewMode = theApp.m_bSaveViewMode;
+        theApp.m_flags1 = roundTripFlags1;
+        theApp.m_bSaveViewMode = false;
+        REQUIRE(theApp.SaveToReg(FALSE));
+        theApp.m_bSaveViewMode = savedSaveViewMode;
+        stored.sync();
+        REQUIRE(stored.value(key(QStringLiteral("Flags1"))).toUInt()
+                == roundTripFlags1);
+        stored.beginGroup(settingsRoot());
+        QStringList keysAfterChildState = stored.childKeys();
+        stored.endGroup();
+        keysAfterChildState.sort();
+        REQUIRE(keysAfterChildState == keysBeforeChildState);
+        theApp.m_flags1 &= ~DWORD(F1_MAXMDI);
+        REQUIRE(theApp.LoadFromReg());
+        REQUIRE(theApp.m_flags1 == roundTripFlags1);
+
+        lifecycleDocument->LoadDocData();
+        theApp.m_pDoc = lifecycleDocument;
+        REQUIRE(LookupDoc(QStringLiteral("#lifecycle"))
+                == lifecycleDocument);
+        QPointer<CChildFrame> deferredFrame = lifecycleFrame;
+        REQUIRE(frame.CloseDocument(lifecycleDocument));
+        REQUIRE(lifecycleDocument->IsCloseStarted());
+        REQUIRE(theApp.m_pExitingDoc == lifecycleDocument);
+        REQUIRE(LookupDoc(QStringLiteral("#lifecycle")) == nullptr);
+        REQUIRE(partCount == 1);
+        QString exitingChannel = QStringLiteral("#LiFeCyClE");
+        REQUIRE(bKeyEventParam(
+            exitingChannel, kepMyActivatedRoom));
+        lifecycleDocument->OnCloseDocument();
+        REQUIRE(partCount == 1);
+
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        application.processEvents();
+        REQUIRE(deferredFrame.isNull());
+        REQUIRE(partCount == 1);
+        REQUIRE(theApp.m_pDoc == nullptr);
+        QString closedChannel = QStringLiteral("#lifecycle");
+        REQUIRE(!bKeyEventParam(closedChannel, kepMyActivatedRoom));
+        theApp.m_pExitingDoc = nullptr;
+        theApp.m_bEmbedded = savedEmbedded;
+        theApp.m_flags1 = savedFlags1;
         theApp.m_pMainWnd = nullptr;
     }
+
+    {
+        // The first placement may maximize a zero-height/hidden MDI client,
+        // but that placement itself must not rewrite F1_MAXMDI.
+        const DWORD savedFlags1 = theApp.m_flags1;
+        const bool savedComicView = theApp.m_bComicView;
+        theApp.m_flags1 &= ~DWORD(F1_MAXMDI);
+        theApp.m_bComicView = false;
+        CMainFrame hiddenFrame;
+        theApp.m_pMainWnd = &hiddenFrame;
+        CChatDoc* initialDocument = hiddenFrame.CreateNewDocument();
+        REQUIRE(initialDocument != nullptr);
+        application.processEvents();
+        REQUIRE(hiddenFrame.GetMDIArea()->activeSubWindow() != nullptr);
+        REQUIRE(hiddenFrame.GetMDIArea()->activeSubWindow()->isMaximized());
+        REQUIRE(!(theApp.m_flags1 & F1_MAXMDI));
+        theApp.m_pMainWnd = nullptr;
+        theApp.m_bComicView = savedComicView;
+        theApp.m_flags1 = savedFlags1;
+    }
+    theApp.m_pExitingDoc = nullptr;
 
     REQUIRE(stored.value(key(QStringLiteral("UPNLWidth"))).toInt()
             == panelWidth);
@@ -416,5 +694,407 @@ int main(int argc, char** argv)
                         sizeof(CHARFORMAT) * NREGULARFONTS) == 0);
     REQUIRE(theApp.m_textColor
             == expectedTextFonts[2].crTextColor);
+
+    {
+        EnterInfoState enterInfoState;
+        const QString savedService = theApp.m_strConnectedService;
+        const int savedViewMode = g_iViewMode;
+        const bool savedSaveViewMode = theApp.m_bSaveViewMode;
+        const bool savedLoadUrl = theApp.m_bLoadURL;
+        const BOOL savedPrompt = g_bCXPrompt;
+
+        CChatDoc document;
+        document.m_bComicView = false;
+        SetChatDoc(&document);
+        QString fileName;
+        BOOL fileNew = FALSE;
+        REQUIRE(theApp.ProcessShellCommand(
+            QStringLiteral(
+                "\"mic://irc.example/#Room__text___secret\""),
+            &fileName, &fileNew));
+        REQUIRE(fileNew);
+        REQUIRE(fileName.isEmpty());
+        REQUIRE(g_enterInfo.m_strChannel
+                == EncodeChan(QStringLiteral("#Room")));
+        REQUIRE(g_enterInfo.m_strPassword
+                == QStringLiteral("secret"));
+        REQUIRE(g_iViewMode == VM_TEXT);
+        REQUIRE(!theApp.m_bSaveViewMode);
+        REQUIRE(!g_bCXPrompt);
+        REQUIRE(theApp.m_bLoadURL);
+        REQUIRE(document.m_fileType == FT_CCR);
+
+        REQUIRE(theApp.ProcessShellCommand(
+            QStringLiteral("irc://irc.example/"),
+            &fileName, &fileNew));
+        REQUIRE(fileNew);
+        REQUIRE(fileName.isEmpty());
+        REQUIRE(g_enterInfo.m_strChannel.isEmpty());
+        REQUIRE(g_enterInfo.m_strPassword.isEmpty());
+        REQUIRE(theApp.m_bLoadURL);
+
+        REQUIRE(theApp.ProcessShellCommand(
+            QStringLiteral("mic://irc.example/"),
+            &fileName, &fileNew));
+        REQUIRE(fileNew);
+        REQUIRE(fileName.isEmpty());
+        REQUIRE(g_enterInfo.m_strChannel.isEmpty());
+        REQUIRE(g_enterInfo.m_strPassword.isEmpty());
+        REQUIRE(theApp.m_bLoadURL);
+
+        REQUIRE(theApp.ProcessShellCommand(
+            QStringLiteral("MIC://irc.example/#CaseSensitive"),
+            &fileName, &fileNew));
+        REQUIRE(!fileNew);
+        REQUIRE(fileName
+                == QStringLiteral("MIC://irc.example/#CaseSensitive"));
+        REQUIRE(theApp.ProcessShellCommand(
+            QStringLiteral("irc://missing-room-separator"),
+            &fileName, &fileNew));
+        REQUIRE(!fileNew);
+        REQUIRE(fileName
+                == QStringLiteral("irc://missing-room-separator"));
+
+        SetChatDoc(nullptr);
+        theApp.m_strConnectedService = savedService;
+        g_iViewMode = savedViewMode;
+        theApp.m_bSaveViewMode = savedSaveViewMode;
+        theApp.m_bLoadURL = savedLoadUrl;
+        g_bCXPrompt = savedPrompt;
+    }
+
+    {
+        CChatDoc document;
+        document.m_bComicView = false;
+        REQUIRE(document.OnNewDocument());
+        SetChatDoc(&document);
+        document.SetModifiedFlag(true);
+        SHORT keepServer = 0;
+        BOOL prompt = FALSE;
+        bool sawCancel = false;
+        answerNextMessage(QMessageBox::Cancel, &sawCancel);
+        REQUIRE(ChatInitialize(&keepServer, &prompt));
+        REQUIRE(sawCancel);
+        REQUIRE(prompt);
+        REQUIRE(document.IsModified());
+        REQUIRE(!document.IsCloseStarted());
+        SetChatDoc(nullptr);
+    }
+
+    {
+        const bool savedMainLoopReady = theApp.m_bMainLoopReady;
+        const bool savedComicView = theApp.m_bComicView;
+        const BOOL savedPrompt = g_bCXPrompt;
+        const SHORT savedKeepServer = g_nCXKeepServer;
+        theApp.m_bComicView = false;
+        theApp.m_bMainLoopReady = true;
+        g_bCXPrompt = TRUE;
+        g_nCXKeepServer = 0;
+
+        CMainFrame frame;
+        theApp.m_pMainWnd = &frame;
+        CChatDoc* document = frame.CreateNewDocument();
+        REQUIRE(document != nullptr);
+        frame.show();
+
+        int setupDialogs = 0;
+        QTimer dialogDriver;
+        dialogDriver.setInterval(1);
+        QObject::connect(&dialogDriver, &QTimer::timeout,
+                         [&setupDialogs] {
+            if (auto* setup = dynamic_cast<CSetupDlg*>(
+                    QApplication::activeModalWidget())) {
+                ++setupDialogs;
+                setup->reject();
+            }
+        });
+        dialogDriver.start();
+        application.processEvents();
+        dialogDriver.stop();
+        REQUIRE(setupDialogs == 1);
+        REQUIRE(document->m_puiSelf != nullptr);
+        REQUIRE(!document->m_history.isEmpty());
+        REQUIRE(!document->IsModified());
+        REQUIRE(g_bCXPrompt);
+        dialogDriver.start();
+        theApp.ScheduleDocumentInitialize(document);
+        application.processEvents();
+        dialogDriver.stop();
+        REQUIRE(setupDialogs == 1);
+
+        int retryStage = 0;
+        QTimer retryDriver;
+        retryDriver.setInterval(1);
+        QObject::connect(&retryDriver, &QTimer::timeout,
+                         [&retryStage] {
+            QWidget* modal = QApplication::activeModalWidget();
+            if (auto* message = qobject_cast<QMessageBox*>(modal)) {
+                if (retryStage == 0) {
+                    retryStage = 1;
+                    message->accept();
+                }
+            } else if (auto* setup =
+                           dynamic_cast<CSetupDlg*>(modal)) {
+                if (retryStage == 1) {
+                    retryStage = 2;
+                    setup->reject();
+                }
+            }
+        });
+        retryDriver.start();
+        theApp.OnConnectError();
+        retryDriver.stop();
+        REQUIRE(retryStage == 2);
+        REQUIRE(document->GetConnectionStatus()
+                == CX_DISCONNECTED);
+        REQUIRE(document->m_puiSelf != nullptr);
+
+        theApp.m_bMainLoopReady = false;
+        theApp.m_pMainWnd = nullptr;
+        theApp.m_pExitingDoc = nullptr;
+        g_bCXPrompt = savedPrompt;
+        g_nCXKeepServer = savedKeepServer;
+        theApp.m_bComicView = savedComicView;
+        theApp.m_bMainLoopReady = savedMainLoopReady;
+    }
+    theApp.m_pExitingDoc = nullptr;
+    SetChatDoc(nullptr);
+    const bool savedIntegrationComicView = theApp.m_bComicView;
+    theApp.m_bComicView = false;
+
+    {
+        CMainFrame frame;
+        theApp.m_pMainWnd = &frame;
+        frame.show();
+        CChatDoc* document = frame.CreateNewDocument();
+        REQUIRE(document != nullptr);
+        application.processEvents();
+        const int childCount =
+            frame.GetMDIArea()->subWindowList().size();
+        const int tab = frame.GetTabBar()->FindTabNum(document);
+        CChatDoc* active = frame.GetActiveDocument();
+
+        document->SetModifiedFlag(true);
+        bool sawCancel = false;
+        answerNextMessage(QMessageBox::Cancel, &sawCancel);
+        REQUIRE(!frame.close());
+        REQUIRE(sawCancel);
+        REQUIRE(frame.isVisible());
+        REQUIRE(!document->IsCloseStarted());
+        REQUIRE(document->IsModified());
+        REQUIRE(frame.GetActiveDocument() == active);
+        REQUIRE(frame.GetMDIArea()->subWindowList().size()
+                == childCount);
+        REQUIRE(frame.GetTabBar()->FindTabNum(document) == tab);
+
+        QTemporaryDir doomedDirectory;
+        REQUIRE(doomedDirectory.isValid());
+        document->m_bComicView = false;
+        const QString doomedPath =
+            doomedDirectory.filePath(QStringLiteral("close.ccc"));
+        REQUIRE(document->DoSave(doomedPath, true));
+        document->SetModifiedFlag(true);
+        REQUIRE(QFile::remove(doomedPath));
+        REQUIRE(QDir().rmdir(doomedDirectory.path()));
+        bool sawFailedSave = false;
+        answerNextMessage(QMessageBox::Save, &sawFailedSave);
+        REQUIRE(!frame.close());
+        REQUIRE(sawFailedSave);
+        REQUIRE(!document->IsCloseStarted());
+        REQUIRE(document->IsModified());
+        REQUIRE(frame.GetActiveDocument() == active);
+        document->SetModifiedFlag(false);
+        theApp.m_pMainWnd = nullptr;
+        theApp.m_pExitingDoc = nullptr;
+    }
+    theApp.m_pExitingDoc = nullptr;
+    SetChatDoc(nullptr);
+
+    {
+        CMainFrame frame;
+        theApp.m_pMainWnd = &frame;
+        frame.show();
+        CChatDoc* closedBeforeReusePrompt =
+            frame.CreateNewDocument();
+        CChatDoc* reuse = frame.CreateNewDocument();
+        REQUIRE(closedBeforeReusePrompt != nullptr);
+        REQUIRE(reuse != nullptr);
+        closedBeforeReusePrompt->SetModifiedFlag(false);
+        reuse->SetModifiedFlag(true);
+        const int childCount =
+            frame.GetMDIArea()->subWindowList().size();
+        QPointer<CChildFrame> closedFrame;
+        for (QMdiSubWindow* window
+             : frame.GetMDIArea()->subWindowList()) {
+            auto* child = dynamic_cast<CChildFrame*>(window);
+            if (child
+                && child->GetDocument()
+                    == closedBeforeReusePrompt) {
+                closedFrame = child;
+                break;
+            }
+        }
+        REQUIRE(!closedFrame.isNull());
+        bool sawCancel = false;
+        answerNextMessage(QMessageBox::Cancel, &sawCancel);
+        REQUIRE(!CChatDoc::CleanupExistingWindows());
+        REQUIRE(sawCancel);
+        REQUIRE(!reuse->IsCloseStarted());
+        REQUIRE(reuse->IsModified());
+        REQUIRE(closedBeforeReusePrompt->IsCloseStarted());
+        REQUIRE(frame.GetMDIArea()->subWindowList().size()
+                == childCount - 1);
+        REQUIRE(frame.GetActiveDocument() == reuse);
+        QCoreApplication::sendPostedEvents(
+            nullptr, QEvent::DeferredDelete);
+        REQUIRE(closedFrame.isNull());
+        REQUIRE(frame.GetMDIArea()->subWindowList().size()
+                == childCount - 1);
+        reuse->SetModifiedFlag(false);
+        theApp.m_pMainWnd = nullptr;
+        theApp.m_pExitingDoc = nullptr;
+    }
+    theApp.m_pExitingDoc = nullptr;
+    SetChatDoc(nullptr);
+
+    {
+        CMainFrame frame;
+        theApp.m_pMainWnd = &frame;
+        frame.show();
+        auto* nonIrcDocument = new CChatDoc;
+        nonIrcDocument->m_bComicView = false;
+        delete nonIrcDocument->m_proto;
+        auto* nonIrcProtocol = new NonIrcProto;
+        nonIrcProtocol->m_doc = nonIrcDocument;
+        nonIrcDocument->m_proto = nonIrcProtocol;
+        REQUIRE(nonIrcDocument->OnNewDocument());
+        REQUIRE(frame.AddDocument(
+            nonIrcDocument, true, true) != nullptr);
+        application.processEvents();
+        nonIrcDocument->SetModifiedFlag(true);
+        const int childCount =
+            frame.GetMDIArea()->subWindowList().size();
+        REQUIRE(nonIrcDocument->m_proto->GetType() != PC_IRC);
+        bool unexpectedPrompt = false;
+        QTimer unexpectedPromptTimer;
+        unexpectedPromptTimer.setSingleShot(true);
+        QObject::connect(
+            &unexpectedPromptTimer, &QTimer::timeout,
+            [&unexpectedPrompt] {
+                auto* prompt = qobject_cast<QMessageBox*>(
+                    QApplication::activeModalWidget());
+                if (!prompt) return;
+                unexpectedPrompt = true;
+                prompt->done(QMessageBox::Cancel);
+            });
+        unexpectedPromptTimer.start(0);
+        const bool cleanupResult =
+            CChatDoc::CleanupExistingWindows();
+        unexpectedPromptTimer.stop();
+        REQUIRE(cleanupResult);
+        REQUIRE(!unexpectedPrompt);
+        REQUIRE(!nonIrcDocument->IsCloseStarted());
+        REQUIRE(nonIrcDocument->IsModified());
+        REQUIRE(frame.GetMDIArea()->subWindowList().size()
+                == childCount);
+        nonIrcDocument->SetModifiedFlag(false);
+        theApp.m_pMainWnd = nullptr;
+        theApp.m_pExitingDoc = nullptr;
+    }
+    theApp.m_pExitingDoc = nullptr;
+    SetChatDoc(nullptr);
+
+    {
+        CMainFrame frame;
+        theApp.m_pMainWnd = &frame;
+        frame.show();
+        CChatDoc* first = frame.CreateNewDocument();
+        CChatDoc* second = frame.CreateNewDocument();
+        REQUIRE(first != nullptr);
+        REQUIRE(second != nullptr);
+        first->SetModifiedFlag(true);
+        second->SetModifiedFlag(true);
+        const int childCount =
+            frame.GetMDIArea()->subWindowList().size();
+        bool sawCancel = false;
+        answerNextMessage(QMessageBox::Cancel, &sawCancel);
+        REQUIRE(!CChatDoc::CleanupExistingWindows());
+        REQUIRE(sawCancel);
+        REQUIRE(!first->IsCloseStarted());
+        REQUIRE(!second->IsCloseStarted());
+        REQUIRE(frame.GetMDIArea()->subWindowList().size()
+                == childCount);
+        first->SetModifiedFlag(false);
+        second->SetModifiedFlag(false);
+        theApp.m_pMainWnd = nullptr;
+        theApp.m_pExitingDoc = nullptr;
+    }
+    theApp.m_pExitingDoc = nullptr;
+    SetChatDoc(nullptr);
+
+    {
+        CMainFrame frame;
+        theApp.m_pMainWnd = &frame;
+        frame.show();
+        CChatDoc* document = frame.CreateNewDocument();
+        REQUIRE(document != nullptr);
+        const QString channel =
+            EncodeChan(QStringLiteral("#replacement"));
+        document->m_proto->m_strChannel = channel;
+        document->m_proto->SetConnectionStatus(CX_DISCONNECTED);
+        document->SetModifiedFlag(true);
+        application.processEvents();
+        bool sawCancel = false;
+        answerNextMessage(QMessageBox::Cancel, &sawCancel);
+        REQUIRE(bSwitchToRoom(
+            QStringLiteral("#replacement"), QString(),
+            QString(), 0L, TRUE));
+        REQUIRE(sawCancel);
+        REQUIRE(!document->IsCloseStarted());
+        REQUIRE(document->IsModified());
+        REQUIRE(LookupDoc(channel) == document);
+        REQUIRE(frame.GetActiveDocument() == document);
+        document->SetModifiedFlag(false);
+        theApp.m_pMainWnd = nullptr;
+        theApp.m_pExitingDoc = nullptr;
+    }
+    theApp.m_pExitingDoc = nullptr;
+    SetChatDoc(nullptr);
+
+    {
+        const DWORD savedFlags0 = theApp.m_flags0;
+        theApp.m_flags0 |= F0_SHOWSTATUSWINDOW;
+        CMainFrame frame;
+        theApp.m_pMainWnd = &frame;
+        CChatDoc* statusDocument = frame.CreateStatusWindow();
+        REQUIRE(statusDocument != nullptr);
+        frame.show();
+        frame.ShowStatusWindow(true);
+        application.processEvents();
+        CChildFrame* statusChild = nullptr;
+        for (QMdiSubWindow* window :
+             frame.GetMDIArea()->subWindowList()) {
+            auto* child = dynamic_cast<CChildFrame*>(window);
+            if (child && child->GetDocument() == statusDocument) {
+                statusChild = child;
+                break;
+            }
+        }
+        REQUIRE(statusChild != nullptr);
+        REQUIRE(statusChild->isVisible());
+        REQUIRE(!statusChild->close());
+        application.processEvents();
+        REQUIRE(!statusChild->isVisible());
+        REQUIRE(!statusDocument->IsCloseStarted());
+        REQUIRE(g_docs.contains(statusDocument));
+        REQUIRE(!(theApp.m_flags0 & F0_SHOWSTATUSWINDOW));
+        theApp.m_pMainWnd = nullptr;
+        theApp.m_pExitingDoc = nullptr;
+        theApp.m_flags0 = savedFlags0;
+    }
+    theApp.m_pExitingDoc = nullptr;
+    SetChatDoc(nullptr);
+    theApp.m_bComicView = savedIntegrationComicView;
+
     return 0;
 }

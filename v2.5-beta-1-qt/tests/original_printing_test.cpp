@@ -1,11 +1,13 @@
 #include "chat.h"
 #include "chatdoc.h"
 #include "chatview.h"
+#include "mainfrm.h"
 #include "originalassets.h"
 #include "pageview.h"
 #include "panel.h"
 #include "textview.h"
 
+#include <QAbstractTextDocumentLayout>
 #include <QApplication>
 #include <QFile>
 #include <QImage>
@@ -13,8 +15,12 @@
 #include <QPainter>
 #include <QRegularExpression>
 #include <QTemporaryDir>
+#include <QTextBlock>
+#include <QTextBlockFormat>
 #include <QTextCharFormat>
 #include <QTextCursor>
+#include <QTimer>
+#include <QtPrintSupport/QPrintDialog>
 #include <QtPrintSupport/QPrinter>
 
 #include <cstdio>
@@ -29,11 +35,12 @@ namespace {
 
 #define REQUIRE(condition) do { if (!(condition)) fail(__LINE__); } while (false)
 
-void configurePdfPrinter(QPrinter& printer, const QString& outputFile)
+void configurePdfPrinter(QPrinter& printer, const QString& outputFile,
+                         int resolution = 96)
 {
     printer.setOutputFormat(QPrinter::PdfFormat);
     printer.setOutputFileName(outputFile);
-    printer.setResolution(96);
+    printer.setResolution(resolution);
     printer.setPageSize(QPageSize(QPageSize::A4));
     printer.setFullPage(false);
     printer.setPrintRange(QPrinter::AllPages);
@@ -138,6 +145,17 @@ int main(int argc, char** argv)
     QTemporaryDir temporary;
     REQUIRE(temporary.isValid());
 
+    {
+        QPrinter highResolutionReference(QPrinter::HighResolution);
+        CMainFrame frame;
+        REQUIRE(frame.GetPrinter() != nullptr);
+        REQUIRE(frame.GetPrinter()->resolution()
+                == highResolutionReference.resolution());
+        const int resolution = frame.GetPrinter()->resolution();
+        theApp.SetPrinterResolution(frame.GetPrinter());
+        REQUIRE(frame.GetPrinter()->resolution() == resolution);
+    }
+
     CChatDoc document;
     document.m_bComicView = true;
     document.SetComicsTitle(originalResourceString(
@@ -149,6 +167,60 @@ int main(int argc, char** argv)
     const QString comicPdf = temporary.filePath(QStringLiteral("comic.pdf"));
     QPrinter comicPrinter(QPrinter::HighResolution);
     configurePdfPrinter(comicPrinter, comicPdf);
+
+    const QString setupPrinterName = comicPrinter.printerName();
+    const QPrinter::OutputFormat setupOutputFormat =
+        comicPrinter.outputFormat();
+    const QString setupOutputFileName = comicPrinter.outputFileName();
+    const int setupResolution = comicPrinter.resolution();
+    const QPageLayout setupPageLayout = comicPrinter.pageLayout();
+    const bool setupFullPage = comicPrinter.fullPage();
+    const QPrinter::ColorMode setupColorMode = comicPrinter.colorMode();
+    const QPrinter::DuplexMode setupDuplex = comicPrinter.duplex();
+    const int setupCopyCount = comicPrinter.copyCount();
+    const bool setupCollateCopies = comicPrinter.collateCopies();
+    const QPrinter::PageOrder setupPageOrder = comicPrinter.pageOrder();
+    const QPrinter::PrintRange setupPrintRange = comicPrinter.printRange();
+    const int setupFromPage = comicPrinter.fromPage();
+    const int setupToPage = comicPrinter.toPage();
+
+    bool sawPrintSetup = false;
+    QTimer::singleShot(0, &application, [&sawPrintSetup] {
+        for (QWidget* widget : QApplication::topLevelWidgets()) {
+            auto* dialog = qobject_cast<QPrintDialog*>(widget);
+            if (!dialog
+                || dialog->objectName() != QLatin1String("CPrintDialog")) {
+                continue;
+            }
+            sawPrintSetup = true;
+            REQUIRE(!dialog->testOption(
+                QAbstractPrintDialog::PrintPageRange));
+            REQUIRE(!dialog->testOption(
+                QAbstractPrintDialog::PrintSelection));
+            REQUIRE(!dialog->testOption(
+                QAbstractPrintDialog::PrintCurrentPage));
+            dialog->reject();
+        }
+    });
+    theApp.OnFilePrintSetup(&comicPrinter, nullptr);
+    REQUIRE(sawPrintSetup);
+    REQUIRE(comicPrinter.printerName() == setupPrinterName);
+    REQUIRE(comicPrinter.outputFormat() == setupOutputFormat);
+    REQUIRE(comicPrinter.outputFileName() == setupOutputFileName);
+    REQUIRE(comicPrinter.resolution() == setupResolution);
+    REQUIRE(comicPrinter.pageLayout() == setupPageLayout);
+    REQUIRE(comicPrinter.fullPage() == setupFullPage);
+    REQUIRE(comicPrinter.colorMode() == setupColorMode);
+    REQUIRE(comicPrinter.duplex() == setupDuplex);
+    REQUIRE(comicPrinter.copyCount() == setupCopyCount);
+    REQUIRE(comicPrinter.collateCopies() == setupCollateCopies);
+    REQUIRE(comicPrinter.pageOrder() == setupPageOrder);
+    REQUIRE(comicPrinter.printRange() == setupPrintRange);
+    REQUIRE(comicPrinter.fromPage() == setupFromPage);
+    REQUIRE(comicPrinter.toPage() == setupToPage);
+
+    document.DestroyPages();
+    REQUIRE(document.m_view->OnPreparePrinting(&comicPrinter));
     const SIZE printSize = comicsPageSize(comicPrinter);
     CUnitPanelPage capacityProbe;
     capacityProbe.PageSizeInPanels(printSize, panelsWide, panelsHigh);
@@ -171,12 +243,16 @@ int main(int argc, char** argv)
     QImage comicFooter(2400, 400, QImage::Format_RGB32);
     comicFooter.fill(Qt::white);
     document.m_view->OnBeginPrinting(&comicPrinter);
+    REQUIRE(document.m_view->GetPrintRetainedPanel() != nullptr);
+    REQUIRE(document.m_view->GetPrintRetainedPanel()->format()
+        == QImage::Format_RGB888);
     {
         QPainter painter(&comicFooter);
         document.m_view->PrintFooter(&painter, comicFooter.rect(), 2,
                                      96.0, 96.0);
     }
     document.m_view->OnEndPrinting(&comicPrinter);
+    REQUIRE(document.m_view->GetPrintRetainedPanel() == nullptr);
     requireFooterRegions(comicFooter);
 
     chatView.CreateTextView(false);
@@ -188,6 +264,33 @@ int main(int argc, char** argv)
         QStringLiteral("IDS_PAGEFOOTER"));
     REQUIRE(!appTitle.isEmpty() && !pageFooter.isEmpty());
 
+    textView->m_pRichEdit->clear();
+    QTextCursor rtfCursor = textView->m_pRichEdit->textCursor();
+    QTextBlockFormat visibleBlockFormat = rtfCursor.blockFormat();
+    visibleBlockFormat.setLeftMargin(
+        (DEFAULT_INDENT + 72)
+        * qMax(1, textView->m_pRichEdit->logicalDpiX())
+        / 1440.0);
+    rtfCursor.setBlockFormat(visibleBlockFormat);
+    rtfCursor.insertText(appTitle);
+    textView->m_pRichEdit->setTextCursor(rtfCursor);
+    const qreal visibleLeftMargin =
+        textView->m_pRichEdit->document()->begin()
+            .blockFormat().leftMargin();
+    REQUIRE(visibleLeftMargin > 0.0);
+    const QString rtfPath =
+        temporary.filePath(QStringLiteral("visible-transcript.rtf"));
+    REQUIRE(WriteRTF(textView->m_pRichEdit, rtfPath));
+    QFile rtfFile(rtfPath);
+    REQUIRE(rtfFile.open(QIODevice::ReadOnly));
+    const QByteArray rtfBytes = rtfFile.readAll();
+    const int expectedLeftIndent = qRound(
+        visibleLeftMargin * 1440.0
+        / qMax(1, textView->m_pRichEdit->logicalDpiX()));
+    REQUIRE(rtfBytes.contains(
+        QByteArray("\\li") + QByteArray::number(expectedLeftIndent)));
+
+    textView->m_pRichEdit->clear();
     QTextCursor cursor(textView->m_pRichEdit->document());
     QTextCharFormat bold;
     bold.setFontWeight(QFont::Bold);
@@ -200,14 +303,41 @@ int main(int argc, char** argv)
     const QString textPdf = temporary.filePath(QStringLiteral("text.pdf"));
     QPrinter textPrinter(QPrinter::HighResolution);
     configurePdfPrinter(textPrinter, textPdf);
+
+    bool sawCancelledPrintDialog = false;
+    QTimer::singleShot(0, &application, [&sawCancelledPrintDialog] {
+        for (QWidget* widget : QApplication::topLevelWidgets()) {
+            if (auto* dialog = qobject_cast<QPrintDialog*>(widget)) {
+                sawCancelledPrintDialog = true;
+                dialog->reject();
+            }
+        }
+    });
+    REQUIRE(!chatView.OnFilePrint(&textPrinter, FALSE));
+    REQUIRE(sawCancelledPrintDialog);
+    REQUIRE(textView->m_printDocument == nullptr);
+
     const int textPages = static_cast<int>(textView->lPrintPage(
         &textPrinter, nullptr, 0, FALSE));
     REQUIRE(textPages > 1);
     REQUIRE(textView->m_printDocument != nullptr);
+    REQUIRE(textView->m_printDocument->documentLayout()->paintDevice()
+        == &textPrinter);
     QTextCursor printFirst(textView->m_printDocument);
     printFirst.movePosition(QTextCursor::NextCharacter,
                             QTextCursor::KeepAnchor);
     REQUIRE(printFirst.charFormat().fontWeight() == QFont::Bold);
+
+    QPrinter highDpiTextPrinter(QPrinter::HighResolution);
+    configurePdfPrinter(highDpiTextPrinter,
+                        temporary.filePath(QStringLiteral("text-high-dpi.pdf")),
+                        300);
+    const int highDpiTextPages = static_cast<int>(textView->lPrintPage(
+        &highDpiTextPrinter, nullptr, 0, FALSE));
+    REQUIRE(textView->m_printDocument->documentLayout()->paintDevice()
+        == &highDpiTextPrinter);
+    REQUIRE(qAbs(highDpiTextPages - textPages) <= 1);
+
     REQUIRE(chatView.GetPhysicalPageCount(&textPrinter) == textPages);
 
     QImage textFooter(2400, 400, QImage::Format_RGB32);

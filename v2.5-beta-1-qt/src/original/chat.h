@@ -71,9 +71,11 @@ public:
     bool m_bAcceptNMCalls = true;
     bool m_bShowIdentity = true;
     bool m_bDisableMOTD = false;
+    bool m_bLoadURL = false;
     bool m_bInSearch = false;
     bool m_bListRegistered = false;
     bool m_bLoginNotifsShown = false;
+    bool m_bMainLoopReady = false;
     DWORD m_flags1 = ~DWORD{0};
     DWORD m_flags0 = 0;
     COLORREF m_comicsColor = RGB(0, 0, 0);
@@ -196,6 +198,12 @@ public:
     void OnHelpSearchtheWeb();
     void OnHelpMsHomepage();
     void DoOptionsDialog(BOOL comicsView, UINT initialPageId = 0);
+    bool ProcessShellCommand(const QString& argument, QString* fileName,
+                             BOOL* fileNew);
+    void ScheduleDocumentInitialize(CChatDoc* document);
+    void OnFileOpen();
+    CChatDoc* OpenDocumentFile(const QString& fileName);
+    void SetPrinterResolution(QPrinter* printer);
     void OnFilePrintSetup(QPrinter* printer, QWidget* parent);
     BOOL StartDownloadingAvatar(CUserInfo* user, CChatDoc* document,
                                 BOOL interactive);
@@ -214,6 +222,7 @@ public:
 
 private:
     QTimer* m_connectTimer = nullptr;
+    bool m_bDocumentInitializeActive = false;
 };
 
 extern CChatApp theApp;

@@ -33,6 +33,8 @@
 #include <QColor>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QFontMetrics>
 #include <QGroupBox>
 #include <QLabel>
@@ -44,7 +46,8 @@
 #include <QTabWidget>
 #include <QTimer>
 #include <QVBoxLayout>
-#include <QtPrintSupport/QPageSetupDialog>
+#include <QtPrintSupport/QAbstractPrintDialog>
+#include <QtPrintSupport/QPrintDialog>
 #include <QtPrintSupport/QPrinter>
 
 #ifndef COMIC_CHAT_ENTRY_ONLY
@@ -319,6 +322,177 @@ void CChatApp::OnHelpMsHomepage()
     LaunchMicrosoftURL(QStringLiteral("IDS_URL_MSHOMEPAGE"));
 }
 
+bool CChatApp::ProcessShellCommand(const QString& argument,
+                                   QString* fileName, BOOL* fileNew)
+{
+    if (!fileName || !fileNew) return false;
+    QString value = argument;
+    if (value.size() >= 2 && value.front() == QLatin1Char('"')
+        && value.back() == QLatin1Char('"')) {
+        value = value.mid(1, value.size() - 2);
+    }
+
+    *fileNew = FALSE;
+    *fileName = value;
+    if (!value.startsWith(QStringLiteral("mic://"), Qt::CaseSensitive)
+        && !value.startsWith(QStringLiteral("irc://"),
+                             Qt::CaseSensitive)) {
+        return true;
+    }
+
+    const qsizetype slash = value.indexOf(QLatin1Char('/'), 6);
+    if (slash < 0) return true;
+
+    ChatSetServer(value.mid(6, slash - 6));
+    const QString roomComponent = value.mid(slash + 1);
+    QString room;
+    QString password;
+    const qsizetype passwordAt =
+        roomComponent.indexOf(QStringLiteral("___"));
+    if (passwordAt >= 0) {
+        room = roomComponent.left(passwordAt);
+        password = roomComponent.mid(passwordAt + 3);
+    }
+
+    const qsizetype textAt =
+        roomComponent.indexOf(QStringLiteral("__text"));
+    const qsizetype comicsAt =
+        roomComponent.indexOf(QStringLiteral("__comics"));
+    if (textAt >= 0) {
+        room = roomComponent.left(textAt);
+        g_iViewMode = VM_TEXT;
+        m_bSaveViewMode = false;
+    } else if (comicsAt >= 0) {
+        room = roomComponent.left(comicsAt);
+        g_iViewMode = VM_COMICS;
+        m_bSaveViewMode = false;
+    }
+    if (room.isEmpty()) room = roomComponent;
+
+    bInitEnterInfo(g_enterInfo, room, password, QString(), 0L, TRUE);
+    if (CChatDoc* document = GetChatDoc())
+        document->m_fileType = FT_CCR;
+    ChatSetCXPrompt(FALSE);
+    m_bLoadURL = true;
+    fileName->clear();
+    *fileNew = TRUE;
+    return true;
+}
+
+void CChatApp::ScheduleDocumentInitialize(CChatDoc* document)
+{
+    if (!m_bMainLoopReady || m_bDocumentInitializeActive
+        || !document || document->m_bStatusView
+        || document->m_fileType != FT_CCR
+        || document->m_bChatInitializeScheduled
+        || document->m_bChatInitializeComplete) {
+        return;
+    }
+
+    document->m_bChatInitializeScheduled = true;
+    const quint64 generation = ++document->m_chatInitializeGeneration;
+    const QPointer<CMainFrame> frame = m_pMainWnd;
+    QTimer::singleShot(0, frame, [frame, document, generation] {
+        if (!frame || !g_docs.contains(document)
+            || document->IsCloseStarted()
+            || document->m_chatInitializeGeneration != generation) {
+            return;
+        }
+        if (document->m_fileType != FT_CCR
+            || frame->GetActiveDocument() != document) {
+            document->m_bChatInitializeScheduled = false;
+            return;
+        }
+        document->m_bChatInitializeComplete = true;
+        theApp.m_bDocumentInitializeActive = true;
+        ChatInitialize(&g_nCXKeepServer, &g_bCXPrompt);
+        theApp.m_bDocumentInitializeActive = false;
+        if (g_docs.contains(document) && !document->IsCloseStarted()) {
+            document->m_bChatInitializeScheduled = false;
+            document->m_bChatInitializeComplete = true;
+        }
+    });
+}
+
+void CChatApp::OnFileOpen()
+{
+    QString initial;
+    if (CChatDoc* document = GetChatDoc())
+        initial = document->GetPathname();
+
+    const QString sourceFilter =
+        originalResourceString(QStringLiteral("IDS_CCC_FILTER"));
+    const QString label = sourceFilter.section(QLatin1Char('|'), 0, 0);
+    QFileDialog dialog(m_pMainWnd.data());
+    dialog.setObjectName(QStringLiteral("CFileDialog"));
+    dialog.setAcceptMode(QFileDialog::AcceptOpen);
+    dialog.setFileMode(QFileDialog::ExistingFile);
+    dialog.setDefaultSuffix(QString::fromLatin1(g_szCCCExt));
+    dialog.setNameFilter(label);
+    if (!initial.isEmpty()) {
+        const QFileInfo info(initial);
+        dialog.setDirectory(info.absolutePath());
+        dialog.selectFile(info.fileName());
+    }
+    if (dialog.exec() == QDialog::Accepted)
+        OpenDocumentFile(dialog.selectedFiles().value(0));
+}
+
+CChatDoc* CChatApp::OpenDocumentFile(const QString& fileName)
+{
+    if (!m_pMainWnd || fileName.isEmpty()) return nullptr;
+    const QFileInfo requestedInfo(fileName);
+    const QString absolute = requestedInfo.canonicalFilePath().isEmpty()
+        ? requestedInfo.absoluteFilePath()
+        : requestedInfo.canonicalFilePath();
+    for (CChatDoc* document : g_docs) {
+        if (!document || document->IsCloseStarted()
+            || document->GetPathname().isEmpty()) {
+            continue;
+        }
+        const QFileInfo openInfo(document->GetPathname());
+        const QString openPath = openInfo.canonicalFilePath().isEmpty()
+            ? openInfo.absoluteFilePath() : openInfo.canonicalFilePath();
+        if (openPath.compare(absolute, Qt::CaseInsensitive) == 0) {
+            m_pMainWnd->ActivateDocument(document);
+            return document;
+        }
+    }
+
+    CChatDoc* previous = m_pMainWnd->GetActiveDocument();
+    const QPointer<QWidget> previousFocus = QApplication::focusWidget();
+    CChatDoc* document = m_pMainWnd->CreateNewDocument();
+    if (!document) return nullptr;
+    CChatDoc* oldContext = GetChatDoc();
+    SetChatDoc(document);
+    const bool opened = document->OnOpenDocument(absolute);
+    if (oldContext && oldContext != document
+        && GetChatDoc() == document) {
+        SetChatDoc(oldContext);
+    }
+    if (!opened) {
+        const bool anotherDocumentActivated =
+            m_pMainWnd->GetActiveDocument()
+            && m_pMainWnd->GetActiveDocument() != document;
+        document->SetModifiedFlag(false);
+        document->OnCloseDocument();
+        m_pMainWnd->CloseDocument(document);
+        if (m_pExitingDoc == document) m_pExitingDoc = nullptr;
+        if (!anotherDocumentActivated && previous) {
+            m_pMainWnd->ActivateDocument(previous);
+            if (previousFocus && previousFocus->isVisible()
+                && previousFocus->isEnabled()) {
+                previousFocus->setFocus(Qt::OtherFocusReason);
+            }
+        }
+        return nullptr;
+    }
+    m_pMainWnd->ActivateDocument(document);
+    if (document->m_fileType == FT_CCR)
+        ScheduleDocumentInitialize(document);
+    return document;
+}
+
 int CChatApp::run(QApplication& app)
 {
     void InitializeEmotionRules();
@@ -353,16 +527,46 @@ int CChatApp::run(QApplication& app)
 
     auto* frame = new CMainFrame;
     m_pMainWnd = frame;
+    m_bMainLoopReady = true;
     frame->CreateStatusWindow();
-    CChatDoc* doc = frame->CreateNewDocument();
+    CChatDoc* doc = nullptr;
+    const QStringList arguments = app.arguments();
+    bool startupCommandFailed = false;
+    if (arguments.size() > 1) {
+        QString fileName;
+        BOOL fileNew = FALSE;
+        if (!ProcessShellCommand(arguments.at(1), &fileName, &fileNew)) {
+            startupCommandFailed = true;
+        } else if (fileNew) {
+            doc = frame->CreateNewDocument();
+        } else {
+            doc = OpenDocumentFile(fileName);
+            startupCommandFailed = !doc;
+        }
+    }
+    if (!doc && !startupCommandFailed) {
+        CChatDoc* activated = frame->GetActiveDocument();
+        if (activated && !activated->m_bStatusView
+            && !activated->IsCloseStarted()) {
+            doc = activated;
+        }
+    }
+    if (!doc && !startupCommandFailed) doc = frame->CreateNewDocument();
     m_pDoc = doc;
-    if (m_maxedFrame) frame->showMaximized();
-    else frame->show();
-    doc->ResetStatus(true, true);
-
-    const int result = app.exec();
-    SaveToReg(TRUE);
+    SetPrinterResolution(frame->GetPrinter());
+    int result = 1;
+    if (!startupCommandFailed && doc) {
+        if (m_maxedFrame) frame->showMaximized();
+        else frame->show();
+        doc->ResetStatus(true, true);
+        ScheduleDocumentInitialize(doc);
+        result = app.exec();
+        SaveToReg(TRUE);
+    }
+    // Modern performs the full persistence phase from ExitInstance before
+    // shutdown cleanup even when ProcessShellCommand failed during startup.
     SaveToReg(FALSE);
+    m_bMainLoopReady = false;
     if (m_connectTimer) m_connectTimer->stop();
     delete m_connectTimer;
     m_connectTimer = nullptr;
@@ -389,10 +593,30 @@ void CChatApp::SetStatusPaneString(int pane, const QString& text)
     }
 }
 
+void CChatApp::SetPrinterResolution(QPrinter* printer)
+{
+    if (!printer) return;
+
+    // Modern asks the Windows driver for symbolic DMRES_MEDIUM quality. Qt has
+    // no equivalent symbolic setting, and the source's numeric 150-DPI
+    // alternative is commented out. The shared printer therefore keeps Qt's
+    // defined HighResolution backend/native DPI. This deliberate no-op does not
+    // claim that HighResolution is equivalent to DMRES_MEDIUM.
+}
+
 void CChatApp::OnFilePrintSetup(QPrinter* printer, QWidget* parent)
 {
     if (!printer) return;
-    QPageSetupDialog dialog(printer, parent);
+    // CWinApp::OnFilePrintSetup is a printer-selection/setup route, not the
+    // separate ID_FILE_PAGE_SETUP resource. QPrintDialog is the closest Qt
+    // adapter; accepting it only updates the shared printer and does not print.
+    QPrintDialog dialog(printer, parent);
+    dialog.setObjectName(QStringLiteral("CPrintDialog"));
+    dialog.setWindowTitle(originalResourceString(
+        QStringLiteral("ID_FILE_PRINT_SETUP")).section(QLatin1Char('\n'), 1, 1));
+    dialog.setOption(QAbstractPrintDialog::PrintPageRange, false);
+    dialog.setOption(QAbstractPrintDialog::PrintSelection, false);
+    dialog.setOption(QAbstractPrintDialog::PrintCurrentPage, false);
     dialog.exec();
 }
 
@@ -408,26 +632,7 @@ void CChatApp::OnSessionConnect()
         return;
     }
 
-    ChatServerDisconnect(FALSE, FALSE);
-    if (!g_bCXPrompt) {
-        g_bCXPrompt = TRUE;
-        bChatServerConnect(QString::fromUtf8(GetMyServer()));
-        return;
-    }
-
-    CSetupDlg dialog(m_pMainWnd.data());
-    if (dialog.exec() != QDialog::Accepted) {
-        if (CChatDoc* document = GetChatDoc())
-            document->SetModifiedFlag(FALSE);
-        return;
-    }
-
-    g_bCXPrompt = TRUE;
-    if (CIrcProto* protocol = GetIrcProto()) {
-        protocol->ConnectToServer(
-            dialog.server(), dialog.nickname(), dialog.realName(),
-            dialog.channel(), dialog.onConnectAction());
-    }
+    InitializeServerConnection(&g_enterInfo, &g_bCXPrompt);
 }
 
 void CChatApp::OnNewroom()
@@ -496,6 +701,7 @@ void CChatApp::OnConnectError()
                          originalResourceString(
                              QStringLiteral("AFX_IDS_APP_TITLE")),
                          message);
+    InitializeServerConnection(&g_enterInfo, &g_bCXPrompt);
 }
 
 void CChatApp::OnConnectConnected()

@@ -389,7 +389,7 @@ void FixMICChannelName(CChatDoc* doc, CRoomInfo* enterRoom)
     doc->m_proto->m_strPrettyChannel = DecodeChan(
         doc->m_proto->m_strChannel, true);
     ChatSetChannel(DecodeChan(enterRoom->m_strChannel, true));
-    doc->SetTitle(doc->m_proto->m_strPrettyChannel);
+    doc->SetLegalPath(doc->m_proto->m_strPrettyChannel);
     doc->m_proto->SetConnectionStatus(doc->GetConnectionStatus());
 }
 
@@ -466,10 +466,14 @@ void CIrcProto::OnLogin()
     }
     AddToServerList(QString::fromUtf8(GetMyServer()));
     SetVisibility((theApp.m_flags1 & F1_USERVISIBLE) != 0);
-    if (theApp.m_iOnConnectAction == CA_JOINROOM
-        && !g_enterInfo.m_strChannel.isEmpty()) {
+    int onConnectAction = theApp.m_iOnConnectAction;
+    if (theApp.m_bLoadURL) {
+        onConnectAction = CA_JOINROOM;
+        theApp.m_bLoadURL = false;
+    }
+    if (onConnectAction == CA_JOINROOM) {
         ChatJoinChannel(g_enterInfo);
-    } else if (theApp.m_iOnConnectAction == CA_ROOMLIST) {
+    } else if (onConnectAction == CA_ROOMLIST) {
         theApp.OnChatroomList();
     }
 }
@@ -481,9 +485,7 @@ void CIrcProto::ChatJoinChannel(CRoomInfo& enterInfo)
 
 void CIrcProto::ChatJoinAux(CRoomInfo& enterInfo)
 {
-    if (enterInfo.m_strChannel.isEmpty()) {
-        return;
-    }
+    Q_ASSERT(!enterInfo.m_strChannel.isEmpty());
     if (enterInfo.m_strPassword.isEmpty()) {
         SendMessageText(QStringLiteral("JOIN %1\r\n").arg(enterInfo.m_strChannel));
     } else {

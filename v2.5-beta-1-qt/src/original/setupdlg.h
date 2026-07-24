@@ -5,6 +5,7 @@
 #include "wincompat.h"
 
 #include <QDialog>
+#include <QFileDialog>
 
 class CBackgroundPage;
 class CCharacterPage;
@@ -16,6 +17,23 @@ class QLineEdit;
 class QPushButton;
 class QShowEvent;
 class QTabWidget;
+
+extern const char g_szCCCExt[];
+extern const char g_szRTFExt[];
+
+class CChatFileDialog : public QFileDialog {
+public:
+    CChatFileDialog(BOOL openFileDialog, const QString& defaultExtension,
+                    const QString& initialPath, const QString& sourceFilter,
+                    QWidget* parent = nullptr);
+
+    void SetFilterIndex(int index);
+    int GetFilterIndex() const;
+    void OnTypeChange();
+
+private:
+    BOOL m_openFileDialog = FALSE;
+};
 
 class CSetupDlg : public QDialog {
 public:

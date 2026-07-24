@@ -25,6 +25,12 @@ class QTextStream;
 class QTextEdit;
 class QWidget;
 
+#define FT_CCC 1
+#define FT_CCR 2
+#define FT_RTF 3
+
+#define EX_DONTREPORT 99999
+
 class CChatDoc {
 public:
     bool m_bComicView = true;
@@ -49,15 +55,31 @@ public:
     QMap<QString, CUserInfo*> m_mapNickToPtr;
     QList<HistoryEntry*> m_history;
     QString m_strStatus;
+    char m_fileType = FT_CCR;
 
     CChatDoc();
     ~CChatDoc();
 
     ConnectionStatus GetConnectionStatus() const;
     void SetComicsTitle(const QString& title);
+    void SetComicsTitle2(const QString& title);
     QString GetComicsTitle();
     void SetTitle(const QString& title);
     const QString& GetTitle() const { return m_title; }
+    const QString& GetPathname() const { return m_strPathName; }
+    int FindFileType(const QString& pathName) const;
+    bool OnNewDocument();
+    bool OnOpenDocument(const QString& pathName);
+    bool ParseLocatorFile(const QString& pathName);
+    bool OnSaveDocument(const QString& pathName);
+    bool DoSave(const QString& pathName = QString(), bool replace = true);
+    bool SaveModified(QWidget* parent = nullptr);
+    void DeleteContents();
+    void OnCloseDocument();
+    bool IsCloseStarted() const { return m_bCloseStarted; }
+    void SaveShortcut(const QString& pathName);
+    void SetLegalPath(const QString& roomName, BOOL addToMRU = TRUE);
+    static bool CleanupExistingWindows();
     void SaveConnectStatus(const QString& status);
     void ResetStatus(bool left = true, bool right = false);
     void RegisterNewContent();
@@ -71,6 +93,9 @@ public:
     void DestroyHistory();
     void ChatSaveConversation(QTextStream& stream) const;
     bool ChatLoadConversation(QTextStream& stream);
+    bool ChatSaveLocator(QTextStream& stream) const;
+    static bool ChatLoadLocator(QTextStream& stream, BOOL join,
+                                BOOL doException, SHORT* keepServer);
     void AddLine(UINT avatarId, const char* text, USHORT modes,
                  CDWordArray* formatting = nullptr);
     void ProcessLine(UINT avatarId, const char* text, USHORT modes,
@@ -155,6 +180,8 @@ public:
     BOOL OnUpdateVisitHomepage() const;
     BOOL OnUpdateAdminBan() const;
     BOOL OnUpdateInvite() const;
+    BOOL OnUpdateFileSave() const;
+    BOOL OnUpdateFileSaveAs() const;
     BOOL OnUpdateFilePrint() const;
     BOOL OnUpdateLeave() const;
     BOOL OnUpdateMakeadmin(BOOL* checked = nullptr) const;
@@ -170,10 +197,18 @@ public:
     void UpdateComicCharacterMenu(QMenu* menu = nullptr);
 
 private:
+    friend class CChatApp;
+
     QString m_comicsTitle;
     QString m_title;
+    QString m_strPathName;
     bool m_bModified = false;
     bool m_bDocumentInitialized = false;
+    bool m_bContentsDeleted = false;
+    bool m_bCloseStarted = false;
+    bool m_bChatInitializeScheduled = false;
+    bool m_bChatInitializeComplete = false;
+    quint64 m_chatInitializeGeneration = 0;
 };
 
 CChatDoc* GetChatDoc();

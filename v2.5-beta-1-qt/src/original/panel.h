@@ -108,7 +108,7 @@ public:
     virtual void ShowInfo(USHORT avatarId, const char* info,
                           char hotLinkChar) = 0;
     virtual void GetBBox(RECT* result) = 0;
-    virtual void Draw(QPainter* painter,
+    virtual void Draw(CPageView* view, QPainter* painter,
                       const CUnitPanelPrintInfo& printInfo,
                       qreal pixelsPerTwipX, qreal pixelsPerTwipY,
                       const QPointF& pageOrigin) = 0;
@@ -157,7 +157,8 @@ public:
     void ShowInfo(USHORT avatarId, const char* info, char hotLinkChar) override;
     void AddStars(CUnitPanel* panel, int topY);
     void GetBBox(RECT* result) override;
-    void Draw(QPainter* painter, const CUnitPanelPrintInfo& printInfo,
+    void Draw(CPageView* view, QPainter* painter,
+              const CUnitPanelPrintInfo& printInfo,
               qreal pixelsPerTwipX, qreal pixelsPerTwipY,
               const QPointF& pageOrigin) override;
     CUnitPanelPrintInfo PreparePrintDC(const SIZE& pageSize,

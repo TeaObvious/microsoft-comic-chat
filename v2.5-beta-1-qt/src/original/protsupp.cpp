@@ -1,5 +1,6 @@
 // Ported from v2.5-beta-1-modern/protsupp.cpp.
-// The implementation keeps Join/353/366/member/starring semantics; no local dummy users.
+// The implementation keeps Join/353/366/member/starring semantics. The only
+// local self member is Modern's explicit OfflineEditInits fallback.
 
 #include "protsupp.h"
 
@@ -51,6 +52,7 @@ BOOL g_bCXPrompt = TRUE;
 BOOL g_bFreezeTabs = FALSE;
 BOOL g_bEnterOnCreate = FALSE;
 BOOL g_bCanViewUnrated = TRUE;
+int g_iViewMode = VM_UNSPECIFIED;
 static QList<CUserInfo*> externalPuis;
 
 void SetArtDir(const char* artDir)
@@ -304,6 +306,79 @@ void SetSendComicsData(bool sendComicsData)
 bool GetSendComicsData()
 {
     return g_bSendComicsData;
+}
+
+void ChatSetCXPrompt(BOOL prompt)
+{
+    g_bCXPrompt = prompt;
+}
+
+BOOL GetCXPrompt()
+{
+    return g_bCXPrompt;
+}
+
+void InitializeServerConnection(CRoomInfo* enterInfo, BOOL* prompt)
+{
+    if (!enterInfo || !prompt) return;
+    if (!CChatDoc::CleanupExistingWindows()) return;
+
+    while (true) {
+        ChatServerDisconnect(FALSE, FALSE);
+        bool goodChannel = true;
+        if (*prompt) {
+            CSetupDlg dialog(theApp.m_pMainWnd.data());
+            if (dialog.exec() != QDialog::Accepted) {
+                AdjustViewMode();
+                OfflineEditInits();
+                if (CChatDoc* document = GetChatDoc())
+                    document->SetModifiedFlag(FALSE);
+                return;
+            }
+            goodChannel = bInitEnterInfo(
+                *enterInfo, theApp.m_myChannel, QString(),
+                QString(), 0L, TRUE);
+        }
+        *prompt = TRUE;
+        if (goodChannel
+            && bChatServerConnect(theApp.m_strConnectedService)) {
+            break;
+        }
+    }
+}
+
+BOOL ChatInitialize(SHORT* keepServer, BOOL* prompt)
+{
+    if (!keepServer || !prompt || *keepServer < 0) return FALSE;
+    g_lastBackdropName.clear();
+
+    if (*keepServer == 0)
+        InitializeServerConnection(&g_enterInfo, prompt);
+
+    if (*keepServer > 0) --*keepServer;
+    *prompt = TRUE;
+    return TRUE;
+}
+
+void AdjustViewMode()
+{
+    CChatDoc* document = GetChatDoc();
+    if (!document) return;
+    if (g_iViewMode == VM_TEXT || !theApp.m_bFoundArt)
+        document->OnViewText();
+    else if (g_iViewMode == VM_COMICS)
+        document->OnViewComics();
+    g_iViewMode = VM_UNSPECIFIED;
+}
+
+void OfflineEditInits()
+{
+    CChatDoc* document = GetChatDoc();
+    if (!document || document->m_bStatusView) return;
+    document->InitHistory();
+    AddAndExecute(
+        new JoinEntry(new CUserInfo(QString::fromUtf8(GetMyName()))),
+        document);
 }
 
 BOOL bCanViewUnrated(BOOL)
@@ -2534,8 +2609,9 @@ bool bProcessAddChannel(const QString& channelName, CRoomInfo* proto,
     proto->m_doc = doc;
     proto->m_strChannel = channelName;
     proto->m_strPrettyChannel = DecodeChan(channelName);
-    doc->SetTitle(proto->m_strPrettyChannel);
+    doc->SetLegalPath(proto->m_strPrettyChannel);
     if (theApp.m_pMainWnd) theApp.m_pMainWnd->ActivateDocument(doc);
+    AdjustViewMode();
     ChatSetChannel(DecodeChan(g_enterInfo.m_strChannel));
     proto->SetConnectionStatus(CX_INCHANNEL);
     SetChatDoc(doc);
@@ -2735,9 +2811,29 @@ bool bSwitchToRoom(const QString& newRoom, const QString& password,
     }
 
     CChatDoc* document = LookupDoc(room);
-    if (document && document->GetConnectionStatus() != CX_INCHANNEL) {
-        if (theApp.m_pMainWnd) theApp.m_pMainWnd->CloseDocument(document);
+
+    if (theApp.m_bEmbedded && currentRoom
+        && !currentRoom->m_strChannel.isEmpty()) {
+        CChatDoc* embeddedDocument = currentRoom->m_doc;
+        if (!embeddedDocument
+            || !embeddedDocument->SaveModified(
+                theApp.m_pMainWnd.data())) {
+            return true;
+        }
+        embeddedDocument->DeleteContents();
+        embeddedDocument->InitMyDocument();
+        currentRoom->m_strChannel.clear();
         document = nullptr;
+    }
+
+    if (document && document->GetConnectionStatus() != CX_INCHANNEL) {
+        if (!document->SaveModified(theApp.m_pMainWnd.data()))
+            return true;
+        document->OnCloseDocument();
+        if (theApp.m_pMainWnd)
+            theApp.m_pMainWnd->CloseDocument(document);
+        document = nullptr;
+        theApp.m_pExitingDoc = nullptr;
     }
 
     if (document) {

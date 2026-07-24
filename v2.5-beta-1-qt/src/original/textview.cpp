@@ -21,6 +21,7 @@
 #include <QActionGroup>
 #include <QContextMenuEvent>
 #include <QDateTime>
+#include <QFile>
 #include <QFocusEvent>
 #include <QFontMetricsF>
 #include <QKeyEvent>
@@ -29,12 +30,15 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QTextCursor>
+#include <QTextBlock>
 #include <QTextDocument>
+#include <QTextFragment>
 #include <QVBoxLayout>
 #include <QtPrintSupport/QPrinter>
 
 #include <algorithm>
 #include <cstring>
+#include <utility>
 
 namespace {
 constexpr int TIMEDATESEP_LENGTH = 3;
@@ -139,6 +143,169 @@ CHARFORMAT defaultRichEditFormat(const QTextCharFormat& source)
                 static_cast<size_t>(face.size()));
     return result;
 }
+
+QString rtfEscapedText(const QString& text)
+{
+    QString escaped;
+    escaped.reserve(text.size() * 2);
+    for (const QChar character : text) {
+        const ushort value = character.unicode();
+        switch (value) {
+        case '\\':
+        case '{':
+        case '}':
+            escaped += QLatin1Char('\\');
+            escaped += character;
+            break;
+        case '\t':
+            escaped += QStringLiteral("\\tab ");
+            break;
+        case '\n':
+            escaped += QStringLiteral("\\line ");
+            break;
+        case '\r':
+            break;
+        default:
+            if (value >= 0x20 && value <= 0x7e) {
+                escaped += character;
+            } else {
+                const qint16 signedValue = static_cast<qint16>(value);
+                escaped += QStringLiteral("\\u%1?").arg(signedValue);
+            }
+            break;
+        }
+    }
+    return escaped;
+}
+
+QString fragmentFontFamily(const QTextCharFormat& format,
+                           const QFont& fallback)
+{
+    const QString family = format.font().family();
+    return family.isEmpty() ? fallback.family() : family;
+}
+
+QColor fragmentColor(const QTextCharFormat& format)
+{
+    const QColor color = format.foreground().color();
+    return color.isValid() ? color : QColor(Qt::black);
+}
+}
+
+BOOL WriteRTF(QTextEdit* richEdit, const QString& fileName)
+{
+    if (!richEdit || !richEdit->document()) return FALSE;
+    const QTextDocument* document = richEdit->document();
+    const QFont defaultFont = document->defaultFont();
+
+    QStringList fonts;
+    QList<QColor> colors;
+    auto addFont = [&fonts](const QString& family) {
+        if (!fonts.contains(family)) fonts.append(family);
+    };
+    auto addColor = [&colors](const QColor& color) {
+        if (!colors.contains(color)) colors.append(color);
+    };
+    addFont(defaultFont.family());
+    addColor(Qt::black);
+    for (QTextBlock block = document->begin();
+         block.isValid(); block = block.next()) {
+        for (QTextBlock::Iterator iterator = block.begin();
+             !iterator.atEnd(); ++iterator) {
+            const QTextFragment fragment = iterator.fragment();
+            if (!fragment.isValid()) continue;
+            addFont(fragmentFontFamily(fragment.charFormat(), defaultFont));
+            addColor(fragmentColor(fragment.charFormat()));
+        }
+    }
+
+    int codePage = 1252;
+    if (auto* mime = static_cast<SCRIPTINFO*>(GetMime()))
+        codePage = mime->iCp;
+
+    QString rtf = QStringLiteral("{\\rtf1\\ansi\\ansicpg%1\\deff0\\uc1\r\n")
+                      .arg(codePage);
+    rtf += QStringLiteral("{\\fonttbl");
+    for (qsizetype index = 0; index < fonts.size(); ++index) {
+        rtf += QStringLiteral("{\\f%1\\fnil\\fcharset%2 ")
+                   .arg(index)
+                   .arg(static_cast<int>(theApp.m_charSet));
+        rtf += rtfEscapedText(fonts.at(index));
+        rtf += QStringLiteral(";}");
+    }
+    rtf += QStringLiteral("}\r\n{\\colortbl;");
+    for (const QColor& color : std::as_const(colors)) {
+        rtf += QStringLiteral("\\red%1\\green%2\\blue%3;")
+                   .arg(color.red()).arg(color.green()).arg(color.blue());
+    }
+    rtf += QStringLiteral("}\r\n");
+
+    for (QTextBlock block = document->begin();
+         block.isValid(); block = block.next()) {
+        rtf += QStringLiteral("\\pard");
+        const QTextBlockFormat blockFormat = block.blockFormat();
+        const qreal leftMargin = blockFormat.leftMargin();
+        if (!qFuzzyIsNull(leftMargin)) {
+            const int leftIndent = qRound(
+                leftMargin * 1440.0
+                / std::max(1, richEdit->logicalDpiX()));
+            rtf += QStringLiteral("\\li%1").arg(leftIndent);
+        }
+        const Qt::Alignment alignment = blockFormat.alignment();
+        if (alignment & Qt::AlignHCenter) rtf += QStringLiteral("\\qc");
+        else if (alignment & Qt::AlignRight) rtf += QStringLiteral("\\qr");
+        else if (alignment & Qt::AlignJustify) rtf += QStringLiteral("\\qj");
+        else rtf += QStringLiteral("\\ql");
+        rtf += QLatin1Char(' ');
+
+        for (QTextBlock::Iterator iterator = block.begin();
+             !iterator.atEnd(); ++iterator) {
+            const QTextFragment fragment = iterator.fragment();
+            if (!fragment.isValid()) continue;
+            const QTextCharFormat format = fragment.charFormat();
+            QFont font = format.font();
+            if (font.family().isEmpty()) font.setFamily(defaultFont.family());
+            qreal pointSize = font.pointSizeF();
+            if (pointSize <= 0.0) pointSize = defaultFont.pointSizeF();
+            if (pointSize <= 0.0 && font.pixelSize() > 0) {
+                pointSize = font.pixelSize() * 72.0
+                    / std::max(1, richEdit->logicalDpiY());
+            }
+            if (pointSize <= 0.0) pointSize = 10.0;
+
+            const int fontIndex = std::max(
+                0, static_cast<int>(
+                       fonts.indexOf(fragmentFontFamily(format, defaultFont))));
+            const int colorIndex = std::max(
+                0, static_cast<int>(colors.indexOf(fragmentColor(format)))) + 1;
+            rtf += QStringLiteral(
+                "\\plain\\f%1\\fs%2\\cf%3%4%5%6%7 ")
+                .arg(fontIndex)
+                .arg(std::max(1, qRound(pointSize * 2.0)))
+                .arg(colorIndex)
+                .arg(font.weight() >= QFont::Bold
+                         ? QStringLiteral("\\b")
+                         : QStringLiteral("\\b0"))
+                .arg(font.italic()
+                         ? QStringLiteral("\\i")
+                         : QStringLiteral("\\i0"))
+                .arg(font.underline()
+                         ? QStringLiteral("\\ul")
+                         : QStringLiteral("\\ul0"))
+                .arg(font.strikeOut()
+                         ? QStringLiteral("\\strike")
+                         : QStringLiteral("\\strike0"));
+            rtf += rtfEscapedText(fragment.text());
+        }
+        rtf += QStringLiteral("\\par\r\n");
+    }
+    rtf += QLatin1Char('}');
+
+    QFile output(fileName);
+    if (!output.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return FALSE;
+    const QByteArray bytes = rtf.toLatin1();
+    return output.write(bytes) == bytes.size();
 }
 
 void SetSpecificFont(CTextCore* textCore, CHARFORMAT& format,
@@ -326,6 +493,7 @@ CTextView::CTextView(CChatDoc* document, QWidget* parent)
 
 CTextView::~CTextView()
 {
+    theApp.SaveToReg(TRUE);
     m_textCore.DetachTextViewHWnd();
     delete m_pFooterFont;
     delete m_fontText;
@@ -351,6 +519,9 @@ void CTextView::PreparePrintDocument(QPrinter* printer)
     }
 
     m_printDocument = m_pRichEdit->document()->clone();
+    // RichEdit FORMATRANGE measures and renders against the same printer DC.
+    // Bind the Qt layout before pagination so point-sized runs use printer DPI.
+    m_printDocument->documentLayout()->setPaintDevice(printer);
     m_printDocument->setDocumentMargin(0.0);
     m_printDocument->setPageSize(m_printTextRect.size());
     m_printDocument->documentLayout()->documentSize();

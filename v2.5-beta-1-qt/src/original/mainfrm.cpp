@@ -22,6 +22,7 @@
 #include <QActionGroup>
 #include <QApplication>
 #include <QClipboard>
+#include <QCloseEvent>
 #include <QEvent>
 #include <QFrame>
 #include <QKeySequence>
@@ -226,6 +227,34 @@ CMainFrame::~CMainFrame()
     for (CChildFrame* frame : frames) delete frame;
 }
 
+void CMainFrame::closeEvent(QCloseEvent* event)
+{
+    if (!event) return;
+    if (m_closingAccepted || m_destroying) {
+        event->accept();
+        return;
+    }
+
+    theApp.SaveToReg(FALSE);
+    const QList<CChatDoc*> documents = g_docs;
+    for (CChatDoc* document : documents) {
+        if (!document || document->m_bStatusView
+            || document->IsCloseStarted()) {
+            continue;
+        }
+        if (!document->SaveModified(this)) {
+            event->ignore();
+            return;
+        }
+    }
+    for (CChatDoc* document : documents) {
+        if (document && !document->IsCloseStarted())
+            document->OnCloseDocument();
+    }
+    m_closingAccepted = true;
+    event->accept();
+}
+
 QString CMainFrame::NextUntitledTitle()
 {
     const QString base = originalResourceString(
@@ -291,6 +320,10 @@ CChildFrame* CMainFrame::AddDocument(CChatDoc* document, bool ownsDocument,
 CChatDoc* CMainFrame::CreateNewDocument()
 {
     auto* document = new CChatDoc;
+    if (!document->OnNewDocument()) {
+        delete document;
+        return nullptr;
+    }
     AddDocument(document, true, true);
     return document;
 }
@@ -315,9 +348,11 @@ void CMainFrame::ActivateDocument(CChatDoc* document)
         frame->ActivateFrame();
 }
 
-void CMainFrame::CloseDocument(CChatDoc* document)
+bool CMainFrame::CloseDocument(CChatDoc* document)
 {
-    if (CChildFrame* frame = m_childFrames.value(document)) frame->close();
+    if (CChildFrame* frame = m_childFrames.value(document))
+        return frame->close();
+    return false;
 }
 
 void CMainFrame::OnMDIActivate(CChildFrame* frame)
@@ -356,6 +391,7 @@ void CMainFrame::OnMDIActivate(CChildFrame* frame)
         if (tab >= 0 && m_wndTabBar->TabControl()->currentIndex() != tab)
             m_wndTabBar->TabControl()->setCurrentIndex(tab);
         m_doc->SetFocusToSayWnd();
+        theApp.ScheduleDocumentInitialize(m_doc);
     }
     updateCommandUi();
     UpdateVisibilityInfo();
@@ -1032,7 +1068,10 @@ CMainFrame::CommandClass CMainFrame::commandClass(
         QStringLiteral("ID_APP_EXIT"),
         QStringLiteral("ID_APP_ABOUT"),
         QStringLiteral("ID_FILE_NEW"),
+        QStringLiteral("ID_FILE_OPEN"),
         QStringLiteral("ID_FILE_CLOSE"),
+        QStringLiteral("ID_FILE_SAVE"),
+        QStringLiteral("ID_FILE_SAVE_AS"),
         QStringLiteral("ID_FILE_PRINT"),
         QStringLiteral("ID_FILE_PRINT_SETUP"),
         QStringLiteral("ID_EDIT_UNDO"),
@@ -1111,9 +1150,6 @@ CMainFrame::CommandClass CMainFrame::commandClass(
     if (active.contains(commandIdentifier)) return CommandClass::Active;
 
     static const QSet<QString> deferred = {
-        QStringLiteral("ID_FILE_OPEN"),
-        QStringLiteral("ID_FILE_SAVE"),
-        QStringLiteral("ID_FILE_SAVE_AS"),
         QStringLiteral("ID_FILE_CREATESHORTCUT"),
         QStringLiteral("ID_FILE_PRINT_PREVIEW"),
         QStringLiteral("ID_FAVORITES_ADDTOFAVORITES"),
@@ -1168,8 +1204,13 @@ void CMainFrame::updateCommandUi()
                       theApp.OnUpdateCanSearch());
     setActionsEnabled(m_commandActions, QStringLiteral("ID_USER_LIST"),
                       theApp.OnUpdateCanSearch());
+    setActionsEnabled(m_commandActions, QStringLiteral("ID_FILE_OPEN"), true);
     setActionsEnabled(m_commandActions, QStringLiteral("ID_FILE_CLOSE"),
                       m_doc != nullptr);
+    setActionsEnabled(m_commandActions, QStringLiteral("ID_FILE_SAVE"),
+                      m_doc && m_doc->OnUpdateFileSave());
+    setActionsEnabled(m_commandActions, QStringLiteral("ID_FILE_SAVE_AS"),
+                      m_doc && m_doc->OnUpdateFileSaveAs());
     setActionsEnabled(m_commandActions, QStringLiteral("ID_FILE_PRINT"),
                       m_doc && m_chatView
                           && m_doc->OnUpdateFilePrint());
@@ -1464,11 +1505,17 @@ void CMainFrame::executeCommand(const QString& commandIdentifier)
     if (commandClass(commandIdentifier) != CommandClass::Active) return;
 
     if (commandIdentifier == QLatin1String("ID_APP_EXIT")) {
-        qApp->quit();
+        close();
     } else if (commandIdentifier == QLatin1String("ID_FILE_NEW")) {
         CreateNewDocument();
+    } else if (commandIdentifier == QLatin1String("ID_FILE_OPEN")) {
+        theApp.OnFileOpen();
     } else if (commandIdentifier == QLatin1String("ID_FILE_CLOSE")) {
         if (m_doc) m_doc->OnFileClose();
+    } else if (commandIdentifier == QLatin1String("ID_FILE_SAVE")) {
+        if (m_doc) m_doc->DoSave(m_doc->GetPathname(), true);
+    } else if (commandIdentifier == QLatin1String("ID_FILE_SAVE_AS")) {
+        if (m_doc) m_doc->DoSave(QString(), true);
     } else if (commandIdentifier == QLatin1String("ID_FILE_PRINT")) {
         if (m_chatView) m_chatView->OnFilePrint(m_printer.get(), FALSE);
     } else if (commandIdentifier == QLatin1String("ID_FILE_PRINT_SETUP")) {
