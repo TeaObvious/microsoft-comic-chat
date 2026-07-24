@@ -74,6 +74,7 @@ protected:
     BOOL AddToolBarBands();
     BOOL AddSingleBand(UINT id, CCoolToolBarEx* toolbar, int width = -1,
                        BOOL breakBefore = FALSE);
+    QList<UINT> currentBandOrder() const;
     void RestoreBandMinSize(UINT, CCoolToolBarEx*) {}
 
     QList<UINT> m_defaultIDs;

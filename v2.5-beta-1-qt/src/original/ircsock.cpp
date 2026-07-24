@@ -910,6 +910,10 @@ void ParseChannelMode(CChatDoc* doc, const QString& flags,
         UpdateSpectators(doc,
                          (doc->m_proto->m_dwModes & CM_MODERATED) != 0);
     }
+    if (theApp.m_pMainWnd
+        && theApp.m_pMainWnd->GetActiveDocument() == doc) {
+        theApp.m_pMainWnd->RefreshCommandUi();
+    }
 }
 }
 

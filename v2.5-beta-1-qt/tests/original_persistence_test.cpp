@@ -379,6 +379,8 @@ int main(int argc, char** argv)
         REQUIRE(theApp.m_bIconMembers);
         document.OnViewListAux();
         REQUIRE(!document.m_bIconMembers);
+        REQUIRE(theApp.m_bIconMembers);
+        document.OnViewList();
         REQUIRE(!theApp.m_bIconMembers);
     }
 

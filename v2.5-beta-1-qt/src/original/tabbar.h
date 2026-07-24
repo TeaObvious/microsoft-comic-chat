@@ -26,6 +26,7 @@ public:
     int FindTabNum(CChatDoc* doc) const;
     CChatDoc* GetTabDoc(int index) const;
     void SetTabIcon(int tabNum, int icon);
+    void ActivateSelection(int index);
     CTabBarTabCtrl* TabControl() const { return m_tabCtrl; }
 
 private:

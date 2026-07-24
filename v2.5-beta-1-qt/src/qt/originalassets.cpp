@@ -479,7 +479,9 @@ OriginalDialogControl parseDialogControl(const QString& statement)
         QStringLiteral("STATE3")
     };
 
-    if (textTypes.contains(control.type) && remainder.startsWith(QLatin1Char('"'))) {
+    const bool hasQuotedText =
+        remainder.startsWith(QLatin1Char('"'));
+    if (textTypes.contains(control.type) && hasQuotedText) {
         qsizetype quoteEnd = 0;
         if (!parseRcQuotedLiteral(remainder, 0, &control.text, &quoteEnd))
             return {};
@@ -488,6 +490,15 @@ OriginalDialogControl parseDialogControl(const QString& statement)
     }
 
     control.fields = commaFields(remainder);
+    // CONTROL accepts either a quoted string or an ordinal/resource token as
+    // its first field.  parseRcQuotedLiteral handled the former above; retain
+    // the latter as the source text and normalize the remaining fields to the
+    // same identifier,class,style,x,y,w,h shape.
+    if (control.type == QLatin1String("CONTROL")
+        && !hasQuotedText
+        && !control.fields.isEmpty()) {
+        control.text = control.fields.takeFirst();
+    }
     int coordinateStart = 1;
     if (control.type == QLatin1String("ICON")) {
         if (control.fields.size() >= 2)

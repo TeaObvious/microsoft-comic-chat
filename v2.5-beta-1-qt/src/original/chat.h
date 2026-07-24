@@ -159,6 +159,10 @@ public:
     void StartConnectionTimer();
     void ResumeConnection();
     void CompleteConnection();
+    void OnSessionConnect();
+    void OnNewroom();
+    void OnCreateroom();
+    void OnDisconnect();
     void OnAwayToggle();
     void OnMotd();
     void OnChatroomList();
@@ -166,7 +170,31 @@ public:
     void OnViewLoginNotifs();
     void OnViewAutomations();
     void OnViewOptions();
+    void OnViewTabbar();
+    BOOL OnViewToolBar(UINT commandID);
+    void OnViewStatuswindow();
     void OnDefineMacro();
+    BOOL OnUpdateSessionConnect() const;
+    BOOL OnUpdateNewroom() const;
+    BOOL OnUpdateDisconnect() const;
+    BOOL OnUpdateViewAutomations() const;
+    BOOL OnUpdateViewOptions() const;
+    BOOL OnUpdateCanSearch() const;
+    BOOL OnUpdateAwayToggle(BOOL* checked = nullptr) const;
+    BOOL OnUpdateViewTabbar(BOOL* checked = nullptr) const;
+    BOOL OnUpdateViewToolBar(UINT commandID,
+                             BOOL* checked = nullptr) const;
+    BOOL OnUpdateMotd() const;
+    BOOL OnUpdateViewStatuswindow(BOOL* checked = nullptr) const;
+    BOOL OnUpdateViewLoginNotifs(BOOL* checked = nullptr) const;
+    void OnAppAbout();
+    void OnHelpFreestuff();
+    void OnHelpProductnews();
+    void OnHelpFaq();
+    void OnHelpOnlineSupport();
+    void OnHelpBestofWeb();
+    void OnHelpSearchtheWeb();
+    void OnHelpMsHomepage();
     void DoOptionsDialog(BOOL comicsView, UINT initialPageId = 0);
     void OnFilePrintSetup(QPrinter* printer, QWidget* parent);
     BOOL StartDownloadingAvatar(CUserInfo* user, CChatDoc* document,

@@ -5,6 +5,7 @@
 #include "chat.h"
 #include "colordlg.h"
 #include "format.h"
+#include "mainfrm.h"
 #include "originalassets.h"
 
 #include <QApplication>
@@ -316,6 +317,8 @@ void CRtfCtrl::ShowFormattingPopUp(const QPoint& globalPoint)
             action->setChecked(m_wMenuFormatStyles & bit);
         }
     }
+    if (theApp.m_pMainWnd)
+        theApp.m_pMainWnd->ConfigureContextMenu(&menu);
     QAction* selected = menu.exec(globalPoint);
     if (selected) executeCommand(selected->data().toString());
 }

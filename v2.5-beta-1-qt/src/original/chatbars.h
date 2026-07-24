@@ -21,12 +21,17 @@ public:
         CCoolToolBarEx*, const QString&, const QIcon&)>;
     using CommandInvoker = std::function<void(const QString&)>;
     using FavoritesMenuProvider = std::function<QMenu*()>;
+    using ContextActionConfigurer =
+        std::function<void(QAction*, const QString&)>;
+    using MenuConfigurer = std::function<void(QMenu*)>;
 
     explicit CChatToolBar(QObject* parent = nullptr);
     BOOL Create(QMainWindow* parentWindow, BOOL doCB32,
                 ActionFactory actionFactory,
                 CommandInvoker commandInvoker,
-                FavoritesMenuProvider favoritesMenuProvider);
+                FavoritesMenuProvider favoritesMenuProvider,
+                ContextActionConfigurer contextActionConfigurer = {},
+                MenuConfigurer menuConfigurer = {});
     void ToggleBar(UINT which);
     void OnContextMenu(CCoolToolBarEx* toolbar, const QPoint& point);
     QMenu* CreateContextMenu(QWidget* parent = nullptr) const;
@@ -39,4 +44,6 @@ private:
     ActionFactory m_actionFactory;
     CommandInvoker m_commandInvoker;
     FavoritesMenuProvider m_favoritesMenuProvider;
+    ContextActionConfigurer m_contextActionConfigurer;
+    MenuConfigurer m_menuConfigurer;
 };

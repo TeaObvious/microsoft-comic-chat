@@ -143,8 +143,10 @@ void CSayCtrl::keyPressEvent(QKeyEvent* event)
                 box->SendScrollKey(event);
         } else {
             CChatDoc* document = GetChatDoc();
-            if (document && document->m_view)
-                QApplication::sendEvent(document->m_view, event);
+            QWidget* output = document
+                ? document->GetComponentWindow(CHATFOCUS_OUTPUTWND)
+                : nullptr;
+            if (output) QApplication::sendEvent(output, event);
         }
         return;
     }

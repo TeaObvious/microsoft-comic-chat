@@ -9,6 +9,7 @@
 #include "chat.h"
 #include "chatdoc.h"
 #include "chanprop.h"
+#include "chatsrv.h"
 #include "histent.h"
 #include "ircproto.h"
 #include "mainfrm.h"
@@ -47,6 +48,7 @@ CRoomInfo g_enterInfo;
 CRoomInfo* currentRoom = nullptr;
 SHORT g_nCXKeepServer = 0;
 BOOL g_bCXPrompt = TRUE;
+BOOL g_bFreezeTabs = FALSE;
 BOOL g_bEnterOnCreate = FALSE;
 BOOL g_bCanViewUnrated = TRUE;
 static QList<CUserInfo*> externalPuis;
@@ -433,6 +435,43 @@ CRoomInfo* GetDefaultProto()
     if (theApp.m_pDoc && theApp.m_pDoc->m_proto) return theApp.m_pDoc->m_proto;
     CChatDoc* document = GetChatDoc();
     return document ? document->m_proto : currentRoom;
+}
+
+QString GetMyServerPrettyName()
+{
+    const CChatService service(theApp.m_strConnectedService);
+    QString prettyName = theApp.m_strConnectedServer;
+    if (!service.GetGroup().isEmpty()) {
+        prettyName += QStringLiteral(" (%1)").arg(service.GetGroup());
+    }
+    return prettyName;
+}
+
+void CRoomInfo::UpdateStatus()
+{
+    QString leftMessage;
+    const ConnectionStatus connection = GetConnectionStatus();
+    if (connection == CX_DISCONNECTED) {
+        leftMessage = originalResourceString(
+            QStringLiteral("ID_DISCONNECTED"));
+    } else if (connection == CX_CONNECTING) {
+        leftMessage = originalResourceString(
+            QStringLiteral("ID_CONNECTING"));
+    } else if (connection == CX_NOCHANNEL) {
+        if (currentRoom && currentRoom != this
+            && this != GetDefaultProto()) {
+            return;
+        }
+        leftMessage = originalResourceString(
+            QStringLiteral("ID_NOCHANNEL"));
+        leftMessage.replace(
+            QStringLiteral("%1"), GetMyServerPrettyName());
+    } else if (connection == CX_INCHANNEL) {
+        if (currentRoom && currentRoom != this) return;
+        if (m_doc) leftMessage = m_doc->m_strStatus;
+    }
+    if (!leftMessage.isEmpty())
+        theApp.SetStatusPaneString(0, leftMessage);
 }
 
 bool bCanDance()
@@ -2115,6 +2154,15 @@ void AddToMembersList(CUserInfo* pui, CChatDoc* doc)
     doc->ResetStatus(false, true);
 }
 
+void MapNullAvatars(CChatDoc* doc)
+{
+    if (!doc) return;
+    for (CUserInfo* pui : doc->m_allChannelPuis) {
+        if (pui && !pui->GetAvatarID())
+            AssignArbitraryAvatar(pui);
+    }
+}
+
 void CIUserPart(const QString& nickname, CChatDoc* doc)
 {
     if (!doc) doc = GetChatDoc();
@@ -2465,7 +2513,9 @@ bool bProcessAddChannel(const QString& channelName, CRoomInfo* proto,
     if (!doc && theApp.m_pMainWnd) {
         ++*keepServer;
         *prompt = FALSE;
+        g_bFreezeTabs = TRUE;
         theApp.m_pMainWnd->CreateNewDocument();
+        g_bFreezeTabs = FALSE;
         doc = LookupDoc(QString());
     }
     if (!doc) {
@@ -3270,6 +3320,8 @@ bool CIrcProto::ProcessSlashCommand(const QString& message,
     if (parse.args.isEmpty()) return false;
     const QString commandText = parse.args.first();
     const SHORT command = NGetCmd(commandText.mid(1));
+    bool forceShowStatusWindow = false;
+    bool result = false;
 
     if (command < 0 || (g_rgIrcCmd[command].uFlags & CMD_MUSTBECONNECTED)) {
         const int status = GetConnectionStatus();
@@ -3283,30 +3335,44 @@ bool CIrcProto::ProcessSlashCommand(const QString& message,
     case cmdidAction:
     case cmdidMe:
     case cmdidThink:
-        return SlashMeOrThink(command == cmdidAction ? cmdidMe
-                                                      : enumCmdId(command),
-                              &parse, message, formatting, modes,
-                              invokedByWhisperBox);
+        result = SlashMeOrThink(
+            command == cmdidAction ? cmdidMe : enumCmdId(command),
+            &parse, message, formatting, modes,
+            invokedByWhisperBox);
+        break;
     case cmdidAway:
-        return SlashAway(&parse, message, formatting);
+        result = SlashAway(&parse, message, formatting);
+        forceShowStatusWindow =
+            GetConnectionStatus() == CX_NOCHANNEL;
+        break;
     case cmdidCreate:
-        return SlashCreate(&parse);
+        result = SlashCreate(&parse);
+        break;
     case cmdidJoin:
-        return SlashJoin(&parse);
+        result = SlashJoin(&parse);
+        break;
     case cmdidList:
-        return SlashList(&parse, message);
+        result = SlashList(&parse, message);
+        break;
     case cmdidMode:
-        return SlashMode(&parse);
+        result = SlashMode(&parse);
+        break;
     case cmdidMsg:
     case cmdidPrivMsg:
-        return SlashPrivMsg(&parse, message, formatting,
-                            invokedByWhisperBox);
+        result = SlashPrivMsg(&parse, message, formatting,
+                              invokedByWhisperBox);
+        break;
     case cmdidNick:
-        return SlashNick(&parse);
+        result = SlashNick(&parse);
+        forceShowStatusWindow =
+            GetConnectionStatus() == CX_NOCHANNEL;
+        break;
     case cmdidPart:
-        return SlashPart(&parse);
+        result = SlashPart(&parse);
+        break;
     case cmdidProp:
-        return SlashProp(&parse);
+        result = SlashProp(&parse);
+        break;
     case cmdidQuote:
     case cmdidRaw: {
         const QByteArray bytes = message.toUtf8();
@@ -3316,14 +3382,19 @@ bool CIrcProto::ProcessSlashCommand(const QString& message,
                && std::isspace(static_cast<unsigned char>(bytes.at(separator)))) {
             ++separator;
         }
-        return SlashRaw(QString::fromUtf8(bytes.mid(separator)), &parse);
+        result = SlashRaw(
+            QString::fromUtf8(bytes.mid(separator)), &parse);
+        break;
     }
     case cmdidServer:
-        return SlashServer(&parse, message);
+        result = SlashServer(&parse, message);
+        break;
     case cmdidSound:
-        return SlashSound(&parse, message, formatting);
+        result = SlashSound(&parse, message, formatting);
+        break;
     case cmdidWho:
-        return SlashWho(message);
+        result = SlashWho(message);
+        break;
     case cmdidInvite:
     case cmdidIsOn:
     case cmdidKick:
@@ -3332,10 +3403,24 @@ bool CIrcProto::ProcessSlashCommand(const QString& message,
     case cmdidTopic:
     case cmdidUserHost:
     case cmdidWhoIs:
-        return SlashGeneric(enumCmdId(command), &parse, message, formatting);
+        result = SlashGeneric(
+            enumCmdId(command), &parse, message, formatting);
+        break;
     default:
-        return SlashRaw(message.mid(1), &parse);
+        result = SlashRaw(message.mid(1), &parse);
+        break;
     }
+
+    const bool commandShowsStatus = command < 0
+        || (g_rgIrcCmd[command].uFlags & CMD_SHOWSTATUSWINDOW)
+        || forceShowStatusWindow;
+    if (result && commandShowsStatus && theApp.m_pMainWnd) {
+        CChatDoc* active =
+            theApp.m_pMainWnd->GetActiveDocument();
+        if (!active || !active->m_bStatusView)
+            theApp.m_pMainWnd->ShowStatusWindow(true, false);
+    }
+    return result;
 }
 
 bool bChatSendText(QString str, unsigned short modes, bool echo,

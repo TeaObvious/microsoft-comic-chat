@@ -22,6 +22,7 @@ class CUserInfo;
 class QMenu;
 class HistoryEntry;
 class QTextStream;
+class QTextEdit;
 class QWidget;
 
 class CChatDoc {
@@ -59,7 +60,8 @@ public:
     const QString& GetTitle() const { return m_title; }
     void SaveConnectStatus(const QString& status);
     void ResetStatus(bool left = true, bool right = false);
-    void RegisterNewContent() { m_bNewContent = true; }
+    void RegisterNewContent();
+    void SetObscured(BOOL obscured);
     void SetModifiedFlag(bool modified) { m_bModified = modified; }
     bool IsModified() const { return m_bModified; }
     void InitHistory();
@@ -81,21 +83,51 @@ public:
     void SetBackDropID(UINT id) { m_myBackDropID = id; }
     UINT GetBackDropID() const { return m_myBackDropID; }
     void DestroyUserState();
-    void UpdateAdminMenu() {}
+    void UpdateAdminMenu();
     void SetFocusToSayWnd();
+    QTextEdit* GetFocusSayOrEdit(BOOL sayOnly = FALSE) const;
     QWidget* GetComponentWindow(UINT component) const;
     void CycleFocus(UINT currentFocus, bool backward);
+    void OnEditUndo();
+    void OnEditCut();
+    void OnEditCopy();
+    void OnEditPaste();
+    void OnEditDelete();
+    void OnEditSelectAll();
+    BOOL OnUpdateEditUndo() const;
+    BOOL OnUpdateEditCut() const;
+    BOOL OnUpdateEditCopy() const;
+    BOOL OnUpdateEditPaste() const;
+    BOOL OnUpdateEditDelete() const;
+    BOOL OnUpdateEditSelectAll() const;
+    void OnActionsSay();
+    void OnActionsThink();
+    void OnActionsWhisper();
+    void OnSendAction();
+    void OnViewComics();
     void OnViewIcon();
+    void OnViewList();
     void OnViewListAux();
     void OnViewText();
     void OnClearHistory();
     void OnSetfont();
+    void OnSetColor();
+    void OnSwitchBold();
+    void OnSwitchItalic();
+    void OnSwitchUnderlined();
+    void OnSwitchFixedPitch();
+    void OnSwitchSymbol();
+    BOOL OnUpdateFormat(UINT commandID, BOOL* checked = nullptr) const;
+    void OnFileClose();
     CUserInfo* GetNextSelectedMember(int& index) const;
     int SelectedMemberCount() const;
     CUserInfo* GetSingleSelectedMember() const;
     void OnMemberGetinfo();
     void OnMemberIgnore();
     void OnAddToNotifs();
+    BOOL OnUpdateMemberGetinfo() const;
+    BOOL OnUpdateMemberIgnore(BOOL* checked = nullptr) const;
+    BOOL OnUpdateAddToNotifs() const;
     void OnGetidentity();
     void OnGetComicCharacter();
     void OnGetVersion();
@@ -111,7 +143,27 @@ public:
     void OnMakespeaker();
     void OnMakespectator();
     void OnChannelprops();
+    void OnAdminBgrndsync();
     void OnLeave();
+    BOOL OnUpdateViewComics(BOOL* checked = nullptr) const;
+    BOOL OnUpdateViewText(BOOL* checked = nullptr) const;
+    BOOL OnUpdateViewIcon(BOOL* checked = nullptr) const;
+    BOOL OnUpdateViewList(BOOL submenu = FALSE,
+                          BOOL* checked = nullptr) const;
+    BOOL OnUpdate1SelectionNotSelf() const;
+    BOOL OnUpdateComicUserNotSelf() const;
+    BOOL OnUpdateVisitHomepage() const;
+    BOOL OnUpdateAdminBan() const;
+    BOOL OnUpdateInvite() const;
+    BOOL OnUpdateFilePrint() const;
+    BOOL OnUpdateLeave() const;
+    BOOL OnUpdateMakeadmin(BOOL* checked = nullptr) const;
+    BOOL OnUpdateMakespeaker(BOOL* checked = nullptr) const;
+    BOOL OnUpdateMakespectator(BOOL* checked = nullptr) const;
+    BOOL OnUpdateChannelprops() const;
+    BOOL OnUpdateAdminBgrndsync() const;
+    BOOL OnUpdateGetidentity() const;
+    BOOL OnUpdateGetComicCharacter() const;
     void OnMacro(UINT commandID);
     BOOL OnUpdateMacro(UINT commandID) const;
     void UpdateMacroMenu();

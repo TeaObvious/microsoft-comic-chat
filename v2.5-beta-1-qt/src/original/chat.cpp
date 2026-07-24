@@ -9,6 +9,8 @@
 #include "autopage.h"
 #include "avatar.h"
 #include "bodycam.h"
+#include "chatbars.h"
+#include "format.h"
 #include "ircproto.h"
 #include "intl.h"
 #include "mainfrm.h"
@@ -18,7 +20,10 @@
 #include "originalassets.h"
 #include "proppage.h"
 #include "protsupp.h"
+#include "resource.h"
 #include "roomlist.h"
+#include "setupdlg.h"
+#include "tabbar.h"
 #include "userinfo.h"
 #include "userlist.h"
 #include "whisprbx.h"
@@ -26,9 +31,16 @@
 
 #include <QApplication>
 #include <QColor>
+#include <QDialog>
 #include <QDialogButtonBox>
+#include <QFontMetrics>
+#include <QGroupBox>
+#include <QLabel>
 #include <QMessageBox>
+#include <QPalette>
 #include <QPixmap>
+#include <QPushButton>
+#include <QSettings>
 #include <QTabWidget>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -37,6 +49,165 @@
 
 #ifndef COMIC_CHAT_ENTRY_ONLY
 CChatApp theApp;
+
+namespace {
+class DialogUnitMapper {
+public:
+    explicit DialogUnitMapper(const QFont& font)
+    {
+        const QFontMetrics metrics(font);
+        const QString alphabet = QStringLiteral(
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
+        m_baseX = qMax(1, (metrics.horizontalAdvance(alphabet) / 26 + 1) / 2);
+        m_baseY = qMax(1, metrics.height());
+    }
+
+    int x(int dlu) const { return (dlu * m_baseX + 2) / 4; }
+    int y(int dlu) const { return (dlu * m_baseY + 4) / 8; }
+    QRect rect(const OriginalDialogControl& control) const
+    {
+        return {x(control.x), y(control.y),
+                x(control.width), y(control.height)};
+    }
+
+private:
+    int m_baseX = 1;
+    int m_baseY = 1;
+};
+
+const OriginalDialogControl* findControl(
+    const OriginalDialogResource& dialog, const QString& identifier)
+{
+    for (const OriginalDialogControl& control : dialog.controls) {
+        if (control.identifier == identifier) return &control;
+    }
+    return nullptr;
+}
+
+void placeControl(QWidget* widget, const OriginalDialogResource& dialog,
+                  const DialogUnitMapper& mapper,
+                  const QString& identifier)
+{
+    if (!widget) return;
+    widget->setObjectName(identifier);
+    if (const OriginalDialogControl* control =
+            findControl(dialog, identifier)) {
+        widget->setGeometry(mapper.rect(*control));
+        widget->setVisible(control->visible);
+    }
+}
+
+QFont resourceFont(const OriginalDialogResource& dialog)
+{
+    QFont font(dialog.fontFamily);
+    if (dialog.fontPointSize > 0) font.setPointSize(dialog.fontPointSize);
+    return font;
+}
+
+class CAboutDlg final : public QDialog {
+public:
+    explicit CAboutDlg(QWidget* parent = nullptr)
+        : QDialog(parent)
+    {
+        const QString resource = QStringLiteral("IDD_ABOUTBOX");
+        const OriginalDialogResource dialog =
+            originalDialogResource(resource);
+        const QFont font = resourceFont(dialog);
+        const DialogUnitMapper mapper(font);
+
+        setObjectName(resource);
+        setFont(font);
+        setWindowTitle(dialog.caption);
+        setFixedSize(mapper.x(dialog.width), mapper.y(dialog.height));
+        setWindowFlag(Qt::WindowContextHelpButtonHint, false);
+        QPalette whitePalette = palette();
+        whitePalette.setColor(QPalette::Window, Qt::white);
+        setPalette(whitePalette);
+        setAutoFillBackground(true);
+
+        auto* tiki = new QLabel(this);
+        tiki->setAlignment(Qt::AlignCenter);
+        tiki->setPixmap(QPixmap(originalFileResourcePath(
+            QStringLiteral("IDB_TIKI"), QStringLiteral("BITMAP"))));
+        placeControl(tiki, dialog, mapper, QStringLiteral("IDC_TIKI"));
+
+        auto makeLabel = [&](const QString& identifier) {
+            auto* label = new QLabel(
+                originalDialogControlText(resource, identifier), this);
+            placeControl(label, dialog, mapper, identifier);
+            return label;
+        };
+
+        QLabel* version = makeLabel(QStringLiteral("IDC_VERSION"));
+        QString versionText;
+        GetVersionString(versionText);
+        version->setText(versionText);
+
+        QLabel* warning = makeLabel(QStringLiteral("IDC_WARNING"));
+        warning->setText(originalResourceString(
+            QStringLiteral("IDS_WARNING_TEXT")));
+        warning->setWordWrap(true);
+
+        QLabel* corporation = makeLabel(QStringLiteral("IDC_CORP"));
+        QLabel* user = makeLabel(QStringLiteral("IDC_USER"));
+        makeLabel(QStringLiteral("IDC_COPY"));
+
+#ifdef Q_OS_WIN
+        struct RegistrationLocation {
+            const char* path;
+            const char* userValue;
+            const char* corporationValue;
+        };
+        static const RegistrationLocation locations[] = {
+            {"HKEY_CURRENT_USER\\Software\\Microsoft\\MS Setup (ACME)\\User Info",
+             "DefName", "DefCompany"},
+            {"HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows NT\\CurrentVersion",
+             "RegisteredOwner", "RegisteredOrganization"},
+            {"HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion",
+             "RegisteredOwner", "RegisteredOrganization"},
+        };
+        for (const RegistrationLocation& location : locations) {
+            QSettings settings(QString::fromLatin1(location.path),
+                               QSettings::NativeFormat);
+            const QString registeredUser = settings.value(
+                QString::fromLatin1(location.userValue)).toString();
+            const QString registeredCorporation = settings.value(
+                QString::fromLatin1(location.corporationValue)).toString();
+            if (!registeredUser.isEmpty()
+                || !registeredCorporation.isEmpty()) {
+                user->setText(registeredUser);
+                corporation->setText(registeredCorporation);
+                break;
+            }
+        }
+#else
+        Q_UNUSED(corporation);
+        Q_UNUSED(user);
+#endif
+
+        auto* license = new QGroupBox(originalDialogControlText(
+            resource, QStringLiteral("IDC_LICENSE")), this);
+        placeControl(license, dialog, mapper, QStringLiteral("IDC_LICENSE"));
+
+        auto* ok = new QPushButton(originalDialogControlText(
+            resource, QStringLiteral("IDOK")), this);
+        ok->setDefault(true);
+        placeControl(ok, dialog, mapper, QStringLiteral("IDOK"));
+        connect(ok, &QPushButton::clicked, this, &QDialog::accept);
+
+        tiki->lower();
+    }
+};
+
+void LaunchMicrosoftURL(const QString& resourceIdentifier)
+{
+    const QString url =
+        originalResourceString(QStringLiteral("IDS_URL_MSPREFIX"))
+        + originalResourceString(resourceIdentifier);
+    const QByteArray encoded = url.toUtf8();
+    FLaunchBrowser(encoded.constData());
+}
+}
 
 void GetVersionString(QString& version)
 {
@@ -105,6 +276,47 @@ void CChatApp::OnViewOptions()
     const BOOL comicsView = GetChatDoc()
         ? GetChatDoc()->m_bComicView : m_bComicView;
     DoOptionsDialog(comicsView);
+}
+
+void CChatApp::OnAppAbout()
+{
+    CAboutDlg about(m_pMainWnd.data());
+    about.exec();
+}
+
+void CChatApp::OnHelpFreestuff()
+{
+    LaunchMicrosoftURL(QStringLiteral("IDS_URL_FREESTUFF"));
+}
+
+void CChatApp::OnHelpProductnews()
+{
+    LaunchMicrosoftURL(QStringLiteral("IDS_URL_PRODUCTNEWS"));
+}
+
+void CChatApp::OnHelpFaq()
+{
+    LaunchMicrosoftURL(QStringLiteral("IDS_URL_FAQ"));
+}
+
+void CChatApp::OnHelpOnlineSupport()
+{
+    LaunchMicrosoftURL(QStringLiteral("IDS_URL_ONLINESUPPORT"));
+}
+
+void CChatApp::OnHelpBestofWeb()
+{
+    LaunchMicrosoftURL(QStringLiteral("IDS_URL_BESTOFWEB"));
+}
+
+void CChatApp::OnHelpSearchtheWeb()
+{
+    LaunchMicrosoftURL(QStringLiteral("IDS_URL_SEARCHTHEWEB"));
+}
+
+void CChatApp::OnHelpMsHomepage()
+{
+    LaunchMicrosoftURL(QStringLiteral("IDS_URL_MSHOMEPAGE"));
 }
 
 int CChatApp::run(QApplication& app)
@@ -182,6 +394,77 @@ void CChatApp::OnFilePrintSetup(QPrinter* printer, QWidget* parent)
     if (!printer) return;
     QPageSetupDialog dialog(printer, parent);
     dialog.exec();
+}
+
+void CChatApp::OnSessionConnect()
+{
+    if (g_docs.size() < 2) {
+        const QPointer<CMainFrame> frame = m_pMainWnd;
+        if (frame) {
+            QTimer::singleShot(0, frame, [frame] {
+                if (frame) frame->CreateNewDocument();
+            });
+        }
+        return;
+    }
+
+    ChatServerDisconnect(FALSE, FALSE);
+    if (!g_bCXPrompt) {
+        g_bCXPrompt = TRUE;
+        bChatServerConnect(QString::fromUtf8(GetMyServer()));
+        return;
+    }
+
+    CSetupDlg dialog(m_pMainWnd.data());
+    if (dialog.exec() != QDialog::Accepted) {
+        if (CChatDoc* document = GetChatDoc())
+            document->SetModifiedFlag(FALSE);
+        return;
+    }
+
+    g_bCXPrompt = TRUE;
+    if (CIrcProto* protocol = GetIrcProto()) {
+        protocol->ConnectToServer(
+            dialog.server(), dialog.nickname(), dialog.realName(),
+            dialog.channel(), dialog.onConnectAction());
+    }
+}
+
+void CChatApp::OnNewroom()
+{
+    ChatSwitchChannel();
+}
+
+void CChatApp::OnCreateroom()
+{
+    ChatCreateRoom(g_enterInfo);
+}
+
+void CChatApp::OnDisconnect()
+{
+    ChatServerDisconnect(TRUE, FALSE);
+}
+
+BOOL CChatApp::OnUpdateSessionConnect() const
+{
+    CIrcProto* protocol = GetIrcProto();
+    return !protocol
+        || protocol->GetConnectionStatus() == CX_DISCONNECTED;
+}
+
+BOOL CChatApp::OnUpdateNewroom() const
+{
+    CIrcProto* protocol = GetIrcProto();
+    if (!protocol) return FALSE;
+    const ConnectionStatus status = protocol->GetConnectionStatus();
+    return status == CX_INCHANNEL || status == CX_NOCHANNEL;
+}
+
+BOOL CChatApp::OnUpdateDisconnect() const
+{
+    CIrcProto* protocol = GetIrcProto();
+    return protocol
+        && protocol->GetConnectionStatus() != CX_DISCONNECTED;
 }
 
 void CChatApp::CompleteConnection()
@@ -292,11 +575,29 @@ void CChatApp::OnAwayToggle()
     }
 }
 
+BOOL CChatApp::OnUpdateAwayToggle(BOOL* checked) const
+{
+    if (checked) *checked = m_bAway;
+    CRoomInfo* protocol = GetDefaultProto();
+    if (!protocol) return FALSE;
+    const ConnectionStatus status = protocol->GetConnectionStatus();
+    return status == CX_NOCHANNEL || status == CX_INCHANNEL;
+}
+
 void CChatApp::OnMotd()
 {
     if (CIrcProto* protocol = GetIrcProto()) {
         m_bDisableMOTD = protocol->bChatShowMOTD();
     }
+}
+
+BOOL CChatApp::OnUpdateMotd() const
+{
+    CIrcProto* protocol = GetIrcProto();
+    if (!protocol) return FALSE;
+    const ConnectionStatus status = protocol->GetConnectionStatus();
+    return (status == CX_INCHANNEL || status == CX_NOCHANNEL)
+        && !m_bDisableMOTD;
 }
 
 void CChatApp::OnViewAutomations()
@@ -362,6 +663,18 @@ void CChatApp::OnDefineMacro()
     OnViewAutomations();
 }
 
+BOOL CChatApp::OnUpdateViewAutomations() const
+{
+    return !currentRoom
+        || currentRoom->GetConnectionStatus() != CX_CONNECTING;
+}
+
+BOOL CChatApp::OnUpdateViewOptions() const
+{
+    return !currentRoom
+        || currentRoom->GetConnectionStatus() != CX_CONNECTING;
+}
+
 namespace {
 CRoomListPersist roomPersist;
 CUserListPersist userPersist;
@@ -384,6 +697,15 @@ void OnChatroomListAux(const QString& query)
 void CChatApp::OnChatroomList()
 {
     OnChatroomListAux();
+}
+
+BOOL CChatApp::OnUpdateCanSearch() const
+{
+    CIrcProto* protocol = GetIrcProto();
+    if (!protocol) return FALSE;
+    const ConnectionStatus status = protocol->GetConnectionStatus();
+    return !m_bInSearch
+        && (status == CX_INCHANNEL || status == CX_NOCHANNEL);
 }
 
 void OnUserListAux(const QString& query, const QString& encodedRoom,
@@ -424,6 +746,46 @@ void CChatApp::OnUserList()
     OnUserListAux();
 }
 
+void CChatApp::OnViewTabbar()
+{
+    CTabBar* tabBar = m_pMainWnd ? m_pMainWnd->GetTabBar() : nullptr;
+    if (!tabBar) return;
+    const bool show = !tabBar->isVisible();
+    tabBar->setVisible(show);
+    if (show) m_flags1 |= F1_SHOWTABBAR;
+    else m_flags1 &= ~DWORD(F1_SHOWTABBAR);
+}
+
+BOOL CChatApp::OnViewToolBar(UINT commandID)
+{
+    UINT which;
+    switch (commandID) {
+    case ID_VIEW_TOOLBAR_MAIN:
+        which = CHAT_TOOLBAR_MAIN;
+        break;
+    case ID_VIEW_TOOLBAR_MEMBER:
+        which = CHAT_TOOLBAR_MEMBER;
+        break;
+    case ID_VIEW_TOOLBAR_TEXT:
+        which = CHAT_TOOLBAR_TEXT;
+        break;
+    default:
+        return FALSE;
+    }
+    CChatToolBar* toolBar = m_pMainWnd
+        ? m_pMainWnd->GetToolBar() : nullptr;
+    if (!toolBar) return FALSE;
+    toolBar->ToggleBar(which);
+    return TRUE;
+}
+
+void CChatApp::OnViewStatuswindow()
+{
+    if (m_pMainWnd)
+        m_pMainWnd->ShowStatusWindow(
+            (m_flags0 & F0_SHOWSTATUSWINDOW) == 0);
+}
+
 void CChatApp::OnViewLoginNotifs()
 {
     m_bLoginNotifsShown = !m_bLoginNotifsShown;
@@ -437,32 +799,57 @@ void CChatApp::OnViewLoginNotifs()
     }
 }
 
-namespace {
-void NoteArtServersGoneOnce()
+BOOL CChatApp::OnUpdateViewTabbar(BOOL* checked) const
 {
-    static BOOL shown = FALSE;
-    if (shown) return;
-    shown = TRUE;
-    QMessageBox::information(
-        theApp.m_pMainWnd, QString(),
-        QStringLiteral(
-            "The Comic Chat art servers are long gone, so custom characters and "
-            "backdrops can no longer be downloaded.\n\n"
-            "The characters bundled with this build will be used instead."));
+    const CTabBar* tabBar = m_pMainWnd
+        ? m_pMainWnd->GetTabBar() : nullptr;
+    if (checked) *checked = tabBar && tabBar->isVisible();
+    return TRUE;
 }
+
+BOOL CChatApp::OnUpdateViewToolBar(UINT commandID,
+                                   BOOL* checked) const
+{
+    UINT flag;
+    switch (commandID) {
+    case ID_VIEW_TOOLBAR_MAIN:
+        flag = SB_TOOLBAR_MAIN;
+        break;
+    case ID_VIEW_TOOLBAR_MEMBER:
+        flag = SB_TOOLBAR_MEMBER;
+        break;
+    case ID_VIEW_TOOLBAR_TEXT:
+        flag = SB_TOOLBAR_TEXT;
+        break;
+    default:
+        if (checked) *checked = FALSE;
+        return FALSE;
+    }
+    if (checked) *checked = (m_iShowBars & flag) != 0;
+    return TRUE;
+}
+
+BOOL CChatApp::OnUpdateViewStatuswindow(BOOL* checked) const
+{
+    if (checked) *checked = (m_flags0 & F0_SHOWSTATUSWINDOW) != 0;
+    return TRUE;
+}
+
+BOOL CChatApp::OnUpdateViewLoginNotifs(BOOL* checked) const
+{
+    if (checked) *checked = m_bLoginNotifsShown;
+    return TRUE;
 }
 
 BOOL CChatApp::StartDownloadingAvatar(CUserInfo* user, CChatDoc*, BOOL)
 {
     if (!user) return FALSE;
-    NoteArtServersGoneOnce();
     user->SetFlag(UF_AUTODOWNLOAD | UF_INTERACTIVEDOWNLOAD, false);
     return FALSE;
 }
 
 BOOL CChatApp::StartDownloadingBackdrop(const char*, const char*)
 {
-    NoteArtServersGoneOnce();
     return FALSE;
 }
 

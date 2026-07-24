@@ -11,14 +11,18 @@
 #include "setupdlg.h"
 
 #include <QCheckBox>
+#include <QFocusEvent>
 #include <QFontMetrics>
 #include <QHeaderView>
 #include <QIntValidator>
+#include <QItemSelectionModel>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QLocale>
 #include <QPushButton>
+#include <QRegularExpression>
+#include <QRegularExpressionValidator>
 #include <QShowEvent>
 #include <QTime>
 #include <QTimer>
@@ -110,6 +114,8 @@ QWidget* createSpinButtons(QWidget* parent,
     down->setArrowType(Qt::DownArrow);
     up->setAutoRepeat(true);
     down->setAutoRepeat(true);
+    up->setFocusPolicy(Qt::NoFocus);
+    down->setFocusPolicy(Qt::NoFocus);
     const int half = qMax(1, holder->height() / 2);
     up->setGeometry(0, 0, holder->width(), half);
     down->setGeometry(0, half, holder->width(), holder->height() - half);
@@ -225,6 +231,7 @@ CRoomListCtrl::CRoomListCtrl(CRoomList* parent)
     setSelectionBehavior(QAbstractItemView::SelectRows);
     setSortingEnabled(false);
     header()->setSectionsClickable(true);
+    header()->setStretchLastSection(false);
     QObject::connect(header(), &QHeaderView::sectionClicked, this,
                      [this](int column) {
         CRoomListPersist* persist = m_roomList->m_persist;
@@ -243,10 +250,21 @@ CRoom* CRoomListCtrl::GetSelectedRoom() const
     const QList<QTreeWidgetItem*> selected = selectedItems();
     if (selected.size() != 1 || !m_roomList || !m_roomList->m_persist)
         return nullptr;
-    const int index = selected.first()->data(0, Qt::UserRole).toInt();
+    QTreeWidgetItem* focused = currentItem();
+    if (!focused) return nullptr;
+    const int index = focused->data(0, Qt::UserRole).toInt();
     if (index < 0 || index >= m_roomList->m_persist->m_rooms.size())
         return nullptr;
     return m_roomList->m_persist->m_rooms.at(index);
+}
+
+void CRoomListCtrl::focusInEvent(QFocusEvent* event)
+{
+    if (!currentItem() && topLevelItemCount() > 0) {
+        setCurrentItem(topLevelItem(0), 0,
+                       QItemSelectionModel::NoUpdate);
+    }
+    QTreeWidget::focusInEvent(event);
 }
 
 CRoomList::CRoomList(CRoomListPersist* persist, QWidget* parent)
@@ -282,6 +300,10 @@ CRoomList::CRoomList(CRoomListPersist* persist, QWidget* parent)
 
     m_topicEdit = new QLineEdit(this);
     placeControl(m_topicEdit, dialog, mapper, QStringLiteral("IDC_TOPIC_EDIT"));
+    // The original control is CFilterEdit with its default NOSPC and comma
+    // filters. Invalid typed or pasted input leaves the preceding value.
+    m_topicEdit->setValidator(new QRegularExpressionValidator(
+        QRegularExpression(QStringLiteral("[^\\s,]*")), m_topicEdit));
     m_ctrlSearchDescrs = new QCheckBox(originalDialogControlText(
         resourceName, QStringLiteral("IDC_SEARCH_DESCRS")), this);
     placeControl(m_ctrlSearchDescrs, dialog, mapper,
@@ -373,6 +395,10 @@ CRoomList::CRoomList(CRoomListPersist* persist, QWidget* parent)
         m_goto->setEnabled(selected);
         m_listMembers->setEnabled(selected);
     });
+
+    installEventFilter(this);
+    for (QWidget* control : findChildren<QWidget*>())
+        control->installEventFilter(this);
 }
 
 void CRoomList::showEvent(QShowEvent* event)
@@ -542,7 +568,7 @@ void CRoomList::OnListmembers()
 
 void CRoomList::ReenableListMembers()
 {
-    m_listMembers->setEnabled(GetSelectedRoom() != nullptr);
+    m_listMembers->setEnabled(true);
     m_reset->setFocus();
     focusNextChild();
 }
@@ -595,12 +621,30 @@ void CRoomList::OnRegisteredOnly()
     OnChangeTopicEdit();
 }
 
-void CRoomList::keyPressEvent(QKeyEvent* event)
+bool CRoomList::eventFilter(QObject* watched, QEvent* event)
 {
-    if (event->key() == Qt::Key_F5) {
-        if (!event->isAutoRepeat()) OnResetList();
-        event->accept();
-        return;
+    if (event->type() == QEvent::KeyPress
+        && (watched == m_minMembersEdit || watched == m_maxMembersEdit)) {
+        auto* keyEvent = static_cast<QKeyEvent*>(event);
+        if (keyEvent->key() == Qt::Key_Up
+            || keyEvent->key() == Qt::Key_Down) {
+            auto* edit = static_cast<QLineEdit*>(watched);
+            const int delta = keyEvent->key() == Qt::Key_Up ? 1 : -1;
+            const int value = qBound(0, edit->text().toInt() + delta, 9999);
+            edit->setText(QString::number(value));
+            return true;
+        }
     }
-    QDialog::keyPressEvent(event);
+    if (event->type() == QEvent::KeyPress
+        || event->type() == QEvent::KeyRelease) {
+        auto* keyEvent = static_cast<QKeyEvent*>(event);
+        if (keyEvent->key() == Qt::Key_F5) {
+            if (event->type() == QEvent::KeyPress
+                && !keyEvent->isAutoRepeat()) {
+                QTimer::singleShot(0, this, &CRoomList::OnResetList);
+            }
+            return true;
+        }
+    }
+    return QDialog::eventFilter(watched, event);
 }

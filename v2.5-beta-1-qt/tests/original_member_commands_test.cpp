@@ -105,6 +105,37 @@ int main(int argc, char** argv)
     REQUIRE(document.SelectedMemberCount() == 1);
     REQUIRE(document.GetSingleSelectedMember() == &other);
 
+    BOOL checked = TRUE;
+    REQUIRE(document.OnUpdateMemberGetinfo());
+    REQUIRE(document.OnUpdateMemberIgnore(&checked));
+    REQUIRE(!checked);
+    REQUIRE(document.OnUpdateAddToNotifs());
+    REQUIRE(document.OnUpdateGetidentity());
+    REQUIRE(document.OnUpdate1SelectionNotSelf());
+    REQUIRE(document.OnUpdateComicUserNotSelf());
+    REQUIRE(document.OnUpdateVisitHomepage());
+    REQUIRE(document.OnUpdateAdminBan());
+    REQUIRE(document.OnUpdateInvite());
+    REQUIRE(!document.OnUpdateMakeadmin(&checked));
+    REQUIRE(!checked);
+
+    document.m_bIconMembers = false;
+    checked = FALSE;
+    REQUIRE(document.OnUpdateViewList(FALSE, &checked));
+    REQUIRE(checked);
+    checked = TRUE;
+    REQUIRE(!document.OnUpdateViewIcon(&checked));
+    REQUIRE(!checked);
+    checked = TRUE;
+    REQUIRE(document.OnUpdateViewComics(&checked));
+    REQUIRE(!checked);
+    checked = FALSE;
+    REQUIRE(document.OnUpdateViewText(&checked));
+    REQUIRE(checked);
+    protocol.m_dwModes |= CM_NOFORMAT;
+    REQUIRE(!document.OnUpdateViewComics());
+    protocol.m_dwModes &= ~DWORD(CM_NOFORMAT);
+
     CSayWnd::SetDefaultButtons(0);
     CSayWnd sayWindow;
     document.m_sayWnd = &sayWindow;
@@ -186,6 +217,9 @@ int main(int argc, char** argv)
     document.OnMemberIgnore();
     REQUIRE(other.Ignored());
     REQUIRE(IsIgnored(identity));
+    checked = FALSE;
+    REQUIRE(document.OnUpdateMemberIgnore(&checked));
+    REQUIRE(checked);
     document.OnMemberIgnore();
     REQUIRE(!other.Ignored());
     REQUIRE(!IsIgnored(identity));

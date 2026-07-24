@@ -6,6 +6,7 @@
 #include <QIcon>
 #include <QList>
 #include <QMainWindow>
+#include <QPointer>
 #include <QString>
 
 #include <memory>
@@ -18,9 +19,13 @@ class CChatView;
 class CChildFrame;
 class CTabBar;
 class QLabel;
+class QEvent;
 class QMenu;
 class QMdiArea;
 class QPrinter;
+class QResizeEvent;
+class QShortcut;
+class QWidget;
 struct OriginalMenuItem;
 
 class CMainFrame : public QMainWindow {
@@ -43,29 +48,57 @@ public:
     void ActivateDocument(CChatDoc* document);
     void CloseDocument(CChatDoc* document);
     void UpdateDocumentTitle(CChatDoc* document, const QString& title);
-    void ShowStatusWindow(bool show);
+    void ShowStatusWindow(bool show, bool activate = true);
     void AutoArrangeWindows();
     void UpdateMacroMenu();
+    void UpdateAdminMenu(CChatDoc* document);
+    QAction* InsertDynamicCommand(QMenu* menu, QAction* before,
+                                  const QString& text,
+                                  const QString& commandIdentifier);
+    void RemoveDynamicCommand(QMenu* menu, QAction* action);
+    bool IsRegisteredMemberMenu(QMenu* menu) const;
+    void ConfigureCommandMenu(QMenu* menu);
+    void ConfigureContextMenu(QMenu* menu);
+    QWidget* GetCommandFocusWidget() const;
+    void RefreshCommandUi();
+    void UpdateVisibilityInfo();
 
 private:
+    enum class CommandClass {
+        Active,
+        Deferred,
+        NoHandler,
+        Unresolved
+    };
+
     QAction* addCommand(QMenu* menu, const QString& text,
                         const QString& commandIdentifier);
     QAction* addToolCommand(CCoolToolBarEx* bar,
                             const QString& commandIdentifier,
                             const QIcon& icon = QIcon());
+    void configureCommandAction(QAction* action,
+                                const QString& commandIdentifier);
     void appendMenuItems(QMenu* menu, const QList<OriginalMenuItem>& items);
+    void unregisterMenuActions(QMenu* menu);
     void createMenus();
     void createAccelerators();
     void createToolBars();
     void createStatusBar();
+    void updateWindowMenu();
     void updateCommandUi();
-    bool commandIsPorted(const QString& commandIdentifier) const;
+    void scheduleCommandUiUpdate();
+    CommandClass commandClass(const QString& commandIdentifier) const;
     void executeCommand(const QString& commandIdentifier);
-    void onConnect();
     void OnMDIActivate(CChildFrame* frame);
     void TileWindows(bool vertical);
+    void ArrangeIcons();
     QString NextUntitledTitle();
 
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
+
+private:
     CChatDoc* m_doc = nullptr;
     CChatView* m_chatView = nullptr;
     CChatDoc* m_statusDoc = nullptr;
@@ -74,11 +107,21 @@ private:
     CTabBar* m_wndTabBar = nullptr;
     QLabel* m_status0 = nullptr;
     QLabel* m_status1 = nullptr;
-    QHash<QString, QList<QAction*>> m_commandActions;
+    QHash<QString, QList<QPointer<QAction>>> m_commandActions;
+    QHash<QString, QList<QPointer<QShortcut>>> m_commandShortcuts;
     QList<QMenu*> m_macroMenus;
     QList<QMenu*> m_memberMenus;
+    QList<QPointer<QAction>> m_memberListPopupActions;
+    QPointer<QMenu> m_windowMenu;
+    QList<QPointer<QAction>> m_windowDocumentActions;
+    QPointer<QAction> m_windowDocumentSeparator;
+    QHash<QMenu*, QAction*> m_adminMenuActions;
+    QHash<QMenu*, QAction*> m_adminSeparators;
     QHash<CChatDoc*, CChildFrame*> m_childFrames;
+    QPointer<QWidget> m_commandFocusWidget;
+    QString m_statusPaneStrings[2];
     int m_nextUntitled = 1;
     bool m_destroying = false;
+    bool m_uiUpdatePending = false;
     std::unique_ptr<QPrinter> m_printer;
 };

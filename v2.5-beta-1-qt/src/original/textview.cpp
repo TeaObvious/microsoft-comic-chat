@@ -9,6 +9,7 @@
 #include "chatview.h"
 #include "ircproto.h"
 #include "intl.h"
+#include "mainfrm.h"
 #include "saywnd.h"
 #include "protsupp.h"
 #include "txtfntdg.h"
@@ -17,6 +18,7 @@
 
 #include <QApplication>
 #include <QAbstractTextDocumentLayout>
+#include <QActionGroup>
 #include <QContextMenuEvent>
 #include <QDateTime>
 #include <QFocusEvent>
@@ -584,16 +586,24 @@ void CTextView::ShowContextMenu(const QPoint& globalPosition)
 {
     QMenu menu(this);
     LoadContextMenu(menu);
+    QActionGroup viewGroup(&menu);
+    viewGroup.setExclusive(true);
     for (QAction* action : menu.actions()) {
         const QString command = action->data().toString();
         if (command == QLatin1String("ID_EDIT_COPY"))
             action->setEnabled(m_pRichEdit->textCursor().hasSelection());
         else if (command == QLatin1String("ID_VIEW_TEXT")) {
+            viewGroup.addAction(action);
             action->setCheckable(true);
             action->setChecked(true);
         } else if (command == QLatin1String("ID_VIEW_COMICS")) {
+            viewGroup.addAction(action);
             action->setCheckable(true);
             action->setChecked(false);
+            action->setEnabled(m_document
+                && (!m_document->m_proto
+                    || !(m_document->m_proto->m_dwModes
+                         & CM_NOFORMAT)));
         } else if (command == QLatin1String("ID_CHANNELPROPS")) {
             action->setEnabled(m_document
                 && m_document->GetConnectionStatus() == CX_INCHANNEL
@@ -601,6 +611,8 @@ void CTextView::ShowContextMenu(const QPoint& globalPosition)
                 && !m_document->m_allChannelPuis.isEmpty());
         }
     }
+    if (theApp.m_pMainWnd)
+        theApp.m_pMainWnd->ConfigureContextMenu(&menu);
     if (QAction* selected = menu.exec(globalPosition))
         ExecuteContextCommand(selected->data().toString());
 }
@@ -612,8 +624,7 @@ void CTextView::ExecuteContextCommand(const QString& commandIdentifier)
     } else if (commandIdentifier == QLatin1String("ID_CLEAR_HISTORY")) {
         if (m_document) m_document->OnClearHistory();
     } else if (commandIdentifier == QLatin1String("ID_VIEW_COMICS")) {
-        if (m_document && m_document->m_client)
-            m_document->m_client->CreateComicView(true);
+        if (m_document) m_document->OnViewComics();
     } else if (commandIdentifier == QLatin1String("ID_CHANNELPROPS")) {
         if (m_document && m_document->GetConnectionStatus() == CX_INCHANNEL
             && g_puiSelf && m_document->m_puiSelf

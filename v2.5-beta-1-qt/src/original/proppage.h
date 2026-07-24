@@ -7,6 +7,7 @@
 #include "chatsrv.h"
 #include "defines.h"
 #include "resource.h"
+#include "rtfctrl.h"
 #include "utils.h"
 #include "wincompat.h"
 
@@ -28,6 +29,27 @@ class QShowEvent;
 class QSpinBox;
 class QTextEdit;
 
+class CSettingsPage final : public QWidget {
+public:
+    explicit CSettingsPage(QWidget* parent = nullptr);
+
+    bool validate();
+    void apply();
+
+private:
+    QCheckBox* m_comicsData = nullptr;
+    QCheckBox* m_acceptWhispers = nullptr;
+    QCheckBox* m_playSounds = nullptr;
+    QCheckBox* m_showArrivals = nullptr;
+    QCheckBox* m_showIdentity = nullptr;
+    QCheckBox* m_visible = nullptr;
+    QCheckBox* m_allowInvites = nullptr;
+    QCheckBox* m_allowFileTx = nullptr;
+    QCheckBox* m_acceptNmCalls = nullptr;
+    QCheckBox* m_save = nullptr;
+    QLineEdit* m_soundPath = nullptr;
+};
+
 class CPersonalPage final : public QWidget {
 public:
     explicit CPersonalPage(QWidget* parent = nullptr);
@@ -39,12 +61,17 @@ public:
     bool validate();
     void apply();
 
+    CRtfCtrl m_rtfProfile;
+
+protected:
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
+
 private:
     QLineEdit* m_realName = nullptr;
     QLineEdit* m_nickname = nullptr;
     QLineEdit* m_email = nullptr;
     QLineEdit* m_homePage = nullptr;
-    QTextEdit* m_profile = nullptr;
 };
 
 CPersonalPage* GetPersonalPage();
@@ -61,12 +88,14 @@ protected:
     void hideEvent(QHideEvent* event) override;
 
 private:
+    void initializePage();
     void selectAvatar();
     void updateCopyright(CAvatarX* avatar);
 
     QListWidget* m_avatarList = nullptr;
     CBodyCam* m_bodyCam = nullptr;
     QTextEdit* m_copyright = nullptr;
+    QString m_initialSelection;
     QString m_selectedName;
 };
 
@@ -76,7 +105,12 @@ public:
 
     void apply();
 
+protected:
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
+
 private:
+    void initializePage();
     void previewSelection();
 
     QListWidget* m_backgroundList = nullptr;

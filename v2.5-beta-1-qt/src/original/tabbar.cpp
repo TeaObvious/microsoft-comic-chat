@@ -11,6 +11,7 @@
 #include <QFont>
 #include <QKeyEvent>
 #include <QPixmap>
+#include <QSignalBlocker>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -38,7 +39,12 @@ void CTabBarTabCtrl::keyPressEvent(QKeyEvent* event)
         event->accept();
         return;
     }
+    const int previous = currentIndex();
     QTabBar::keyPressEvent(event);
+    if (currentIndex() != previous) {
+        if (auto* owner = dynamic_cast<CTabBar*>(parentWidget()))
+            owner->ActivateSelection(currentIndex());
+    }
 }
 
 CTabBar::CTabBar(QWidget* parent)
@@ -74,15 +80,8 @@ CTabBar::CTabBar(QWidget* parent)
     addWidget(container);
     m_tabCtrl->hide();
 
-    connect(m_tabCtrl, &QTabBar::currentChanged, this, [this](int index) {
-        if (index < 0 || index >= m_docs.size()) return;
-        CChatDoc* document = m_docs[index];
-        if (!document) return;
-        if (auto* frame = dynamic_cast<CMainFrame*>(window()))
-            frame->ActivateDocument(document);
-        else
-            SetChatDoc(document);
-    });
+    connect(m_tabCtrl, &QTabBar::tabBarClicked,
+            this, &CTabBar::ActivateSelection);
 }
 
 QIcon CTabBar::originalTabIcon(int icon) const
@@ -92,6 +91,8 @@ QIcon CTabBar::originalTabIcon(int icon) const
 
 void CTabBar::AddMDITab(const QString& channelName, CChatDoc* doc, bool selectIt)
 {
+    QString tabName = channelName;
+    tabName.replace(QLatin1Char('&'), QStringLiteral("&&"));
     const int tabCount = m_docs.size();
     if (tabCount == 0) m_tabCtrl->show();
 
@@ -99,7 +100,7 @@ void CTabBar::AddMDITab(const QString& channelName, CChatDoc* doc, bool selectIt
     if (doc && !doc->m_bStatusView) {
         while (place < tabCount) {
             CChatDoc* otherDocument = m_docs[place];
-            if (channelName.compare(GetTabString(place), Qt::CaseInsensitive) < 0
+            if (tabName.compare(GetTabString(place), Qt::CaseInsensitive) < 0
                 && otherDocument && !otherDocument->m_bStatusView) {
                 break;
             }
@@ -107,10 +108,13 @@ void CTabBar::AddMDITab(const QString& channelName, CChatDoc* doc, bool selectIt
         }
     }
 
-    m_tabCtrl->insertTab(place, originalTabIcon(doc && doc->m_bStatusView ? 2 : 0),
-                         channelName);
+    const QSignalBlocker blocker(m_tabCtrl);
     m_docs.insert(place, doc);
-    if (selectIt) m_tabCtrl->setCurrentIndex(place);
+    m_tabCtrl->insertTab(
+        place, originalTabIcon(doc && doc->m_bStatusView ? 2 : 0),
+        tabName);
+    if (selectIt)
+        m_tabCtrl->setCurrentIndex(place);
     m_lLargestTab = std::max<long>(m_lLargestTab, m_tabCtrl->tabRect(place).width());
     if (doc) doc->m_bNewContent = false;
 }
@@ -118,9 +122,10 @@ void CTabBar::AddMDITab(const QString& channelName, CChatDoc* doc, bool selectIt
 void CTabBar::DelMDITab(int tab)
 {
     if (tab < 0 || tab >= m_docs.size()) return;
+    const QSignalBlocker blocker(m_tabCtrl);
     const int removedWidth = m_tabCtrl->tabRect(tab).width();
-    m_tabCtrl->removeTab(tab);
     m_docs.removeAt(tab);
+    m_tabCtrl->removeTab(tab);
     if (m_docs.isEmpty()) {
         m_tabCtrl->hide();
         m_lLargestTab = 64L;
@@ -129,6 +134,19 @@ void CTabBar::DelMDITab(int tab)
         for (int index = 0; index < m_docs.size(); ++index)
             m_lLargestTab = std::max<long>(m_lLargestTab, m_tabCtrl->tabRect(index).width());
     }
+}
+
+void CTabBar::ActivateSelection(int index)
+{
+    if (index < 0 || index >= m_docs.size()) return;
+    CChatDoc* document = m_docs[index];
+    if (!document) return;
+    const bool restoreTabFocus = m_tabCtrl->hasFocus();
+    if (auto* frame = dynamic_cast<CMainFrame*>(window()))
+        frame->ActivateDocument(document);
+    else
+        SetChatDoc(document);
+    if (restoreTabFocus) m_tabCtrl->setFocus();
 }
 
 QString CTabBar::GetTabString(int tab) const

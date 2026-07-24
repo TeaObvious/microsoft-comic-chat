@@ -46,7 +46,8 @@ void AddToStatus(CIrcPrint& ircPrint, const QString& line,
     QString pretty;
     switch (ircPrint.m_iType) {
     case PT_NOTINIT:
-        return;
+        pretty = line;
+        break;
     case PT_LASTSTRING:
     {
         QString message = ircPrint.m_szMessage;
@@ -104,6 +105,18 @@ CStatusView::CStatusView(CChatDoc* document, QWidget* parent)
     : CTextView(document, parent)
 {
     m_textCore.bSetInsertBlank(TEXT_VIEW_BLANK_NEVER);
+}
+
+BOOL CStatusView::OnUpdateViewComics(BOOL* checked) const
+{
+    if (checked) *checked = FALSE;
+    return FALSE;
+}
+
+BOOL CStatusView::OnUpdateViewText(BOOL* checked) const
+{
+    if (checked) *checked = TRUE;
+    return FALSE;
 }
 
 int CStatusView::LoadContextMenu(QMenu& menu)

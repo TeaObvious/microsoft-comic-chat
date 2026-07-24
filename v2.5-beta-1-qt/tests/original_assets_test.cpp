@@ -57,6 +57,8 @@ int main()
             != originalResourcePath(QStringLiteral("toolbar.bmp"))
         || originalFileResourcePath(QStringLiteral("IDB_TABS"), QStringLiteral("BITMAP"))
             != originalResourcePath(QStringLiteral("tabbar.bmp"))
+        || originalFileResourcePath(QStringLiteral("IDB_TIKI"), QStringLiteral("BITMAP"))
+            != originalResourcePath(QStringLiteral("tiki2.bmp"))
         || originalFileResourcePath(QStringLiteral("IDR_MAINFRAME"), QStringLiteral("ICON"))
             != originalResourcePath(QStringLiteral("chat.ico"))) {
         return EXIT_FAILURE;
@@ -110,6 +112,27 @@ int main()
         || mainMenu[2].children[0].children[1].commandIdentifier
             != QStringLiteral("ID_VIEW_TOOLBAR_MEMBER")
         || mainMenu[8].children.last().commandIdentifier != QStringLiteral("ID_APP_ABOUT")) {
+        return EXIT_FAILURE;
+    }
+
+    const QList<OriginalMenuItem> bodyContext = originalMenuResource(
+        QStringLiteral("IDR_BODYCONTEXT"));
+    if (bodyContext.size() != 1
+        || bodyContext.first().type != OriginalMenuItemType::Popup
+        || bodyContext.first().text != QStringLiteral("&BodyContext")
+        || bodyContext.first().children.size() != 2
+        || bodyContext.first().children[0].type
+            != OriginalMenuItemType::Command
+        || bodyContext.first().children[0].text
+            != QStringLiteral("&Frozen")
+        || bodyContext.first().children[0].commandIdentifier
+            != QStringLiteral("ID_BODYCONTEXT_FREEZE")
+        || bodyContext.first().children[1].type
+            != OriginalMenuItemType::Command
+        || bodyContext.first().children[1].text
+            != QStringLiteral("&Send Expression")
+        || bodyContext.first().children[1].commandIdentifier
+            != QStringLiteral("ID_BODYCONTEXT_SENDEXPRESSION")) {
         return EXIT_FAILURE;
     }
 
@@ -179,6 +202,41 @@ int main()
             != QStringLiteral("Create Chat Room")) {
         return EXIT_FAILURE;
     }
+
+    const OriginalDialogResource aboutDialog = originalDialogResource(
+        QStringLiteral("IDD_ABOUTBOX"));
+    if (aboutDialog.caption != QStringLiteral("About Microsoft Chat")
+        || aboutDialog.width != 279 || aboutDialog.height != 137
+        || aboutDialog.fontPointSize != 8
+        || aboutDialog.fontFamily != QStringLiteral("Comic Sans MS")
+        || aboutDialog.controls.size() != 8
+        || originalDialogControlText(QStringLiteral("IDD_ABOUTBOX"),
+                                     QStringLiteral("IDC_VERSION"))
+            != QStringLiteral("%1 %2 (%3)")
+        || originalDialogControlText(QStringLiteral("IDD_ABOUTBOX"),
+                                     QStringLiteral("IDC_WARNING"))
+            != QStringLiteral("To be replaced by IDS_WARNING_TEXT")
+        || originalDialogControlText(QStringLiteral("IDD_ABOUTBOX"),
+                                     QStringLiteral("IDC_CORP"))
+            != QStringLiteral("Microsoft Corporation")
+        || originalDialogControlText(QStringLiteral("IDD_ABOUTBOX"),
+                                     QStringLiteral("IDC_USER"))
+            != QStringLiteral("User")
+        || originalDialogControlText(QStringLiteral("IDD_ABOUTBOX"),
+                                     QStringLiteral("IDC_LICENSE"))
+            != QStringLiteral("This product is licensed to")
+        || aboutDialog.controls.last().identifier
+            != QStringLiteral("IDC_TIKI")
+        || aboutDialog.controls.last().text != QStringLiteral("203")
+        || !aboutDialog.controls.last().style.contains(
+            QStringLiteral("SS_BITMAP"))
+        || aboutDialog.controls.last().x != 0
+        || aboutDialog.controls.last().y != 0
+        || aboutDialog.controls.last().width != 280
+        || aboutDialog.controls.last().height != 137) {
+        return EXIT_FAILURE;
+    }
+
     const QStringList automationKeys = originalDialogInitStrings(
         QStringLiteral("IDD_AUTOMATION_PAGE"), QStringLiteral("IDC_KEY"));
     if (automationKeys.size() != 10

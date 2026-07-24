@@ -9,6 +9,7 @@
 #include "histent.h"
 #include "intl.h"
 #include "ircsock.h"
+#include "mainfrm.h"
 #include "notif.h"
 #include "originalassets.h"
 #include "protsupp.h"
@@ -1220,12 +1221,14 @@ void CIrcProto::SetConnectionStatus(ConnectionStatus status)
             break;
         case CX_NOCHANNEL:
             statusText = originalResourceString(QStringLiteral("ID_NOCHANNEL"));
-            statusText.replace(QStringLiteral("%1"), theApp.m_strConnectedServer);
+            statusText.replace(
+                QStringLiteral("%1"), GetMyServerPrettyName());
             break;
         case CX_INCHANNEL:
             statusText = originalResourceString(QStringLiteral("ID_CONNECTED"));
             statusText.replace(QStringLiteral("%1"), m_strPrettyChannel);
-            statusText.replace(QStringLiteral("%2"), theApp.m_strConnectedServer);
+            statusText.replace(
+                QStringLiteral("%2"), GetMyServerPrettyName());
             break;
         default:
             break;
@@ -1235,6 +1238,8 @@ void CIrcProto::SetConnectionStatus(ConnectionStatus status)
         }
         doc->ResetStatus(true, false);
     }
+    if (theApp.m_pMainWnd)
+        theApp.m_pMainWnd->RefreshCommandUi();
 }
 
 ConnectionStatus CIrcProto::GetConnectionStatus() const

@@ -4,6 +4,7 @@
 #include "coolbar.h"
 
 #include <QAction>
+#include <QLayout>
 #include <QMainWindow>
 #include <QMenu>
 #include <QTimer>
@@ -150,8 +151,11 @@ BOOL CCoolBarEx::AddSingleBand(UINT id, CCoolToolBarEx* toolbar, int width,
         m_breakBefore.remove(id);
     }
     m_parentWnd->addToolBar(Qt::TopToolBarArea, toolbar);
+    toolbar->setMinimumWidth(0);
+    toolbar->setMaximumWidth(QWIDGETSIZE_MAX);
     if (width >= 0 && width != 0xffff) {
         m_bandLengths.insert(id, width);
+        toolbar->setFixedWidth(width);
         toolbar->resize(width, toolbar->sizeHint().height());
     } else {
         m_bandLengths.insert(id, toolbar->sizeHint().width());
@@ -175,7 +179,28 @@ BOOL CCoolBarEx::AddToolBarBands()
 
 int CCoolBarEx::FindBand(UINT id) const
 {
-    return m_bandOrder.indexOf(id);
+    return currentBandOrder().indexOf(id);
+}
+
+QList<UINT> CCoolBarEx::currentBandOrder() const
+{
+    QList<UINT> result = m_bandOrder;
+    std::stable_sort(
+        result.begin(), result.end(),
+        [this](UINT left, UINT right) {
+            CCoolToolBarEx* leftBar = m_mapToolBars.value(left);
+            CCoolToolBarEx* rightBar = m_mapToolBars.value(right);
+            if (!leftBar || !rightBar) return false;
+            const QPoint leftPosition = leftBar->pos();
+            const QPoint rightPosition = rightBar->pos();
+            if (leftPosition.y() != rightPosition.y())
+                return leftPosition.y() < rightPosition.y();
+            if (leftPosition.x() != rightPosition.x())
+                return leftPosition.x() < rightPosition.x();
+            return m_bandOrder.indexOf(left)
+                < m_bandOrder.indexOf(right);
+        });
+    return result;
 }
 
 void CCoolBarEx::ShowBar(UINT barID, BOOL show)
@@ -211,7 +236,7 @@ BOOL CCoolBarEx::SaveStateToBuffer(QByteArray* bufferOut) const
 {
     if (!bufferOut) return FALSE;
     bufferOut->clear();
-    for (UINT id : m_bandOrder) {
+    for (UINT id : currentBandOrder()) {
         CCoolToolBarEx* toolbar = m_mapToolBars.value(id);
         if (!toolbar) return FALSE;
         int width = toolbar->width();
@@ -220,7 +245,8 @@ BOOL CCoolBarEx::SaveStateToBuffer(QByteArray* bufferOut) const
         appendWord(*bufferOut, id);
         appendWord(*bufferOut, static_cast<UINT>(width));
         bufferOut->append(static_cast<char>(
-            m_breakBefore.contains(id) ? CBBSV_NEWLINE : 0));
+            m_parentWnd && m_parentWnd->toolBarBreak(toolbar)
+                ? CBBSV_NEWLINE : 0));
     }
     bufferOut->append(QByteArray(SavedBandSize, '\0'));
     return TRUE;
@@ -284,5 +310,7 @@ BOOL CCoolBarEx::LoadStateFromBuffer(const QByteArray& buffer)
         }
         m_bandOrder.append(band.id);
     }
+    if (m_parentWnd && m_parentWnd->layout())
+        m_parentWnd->layout()->activate();
     return TRUE;
 }

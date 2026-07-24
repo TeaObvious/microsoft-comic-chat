@@ -5,12 +5,14 @@
 #include "chat.h"
 #include "chatdoc.h"
 #include "ircproto.h"
+#include "mainfrm.h"
 #include "originalassets.h"
 #include "protsupp.h"
 #include "resource.h"
 #include "userinfo.h"
 
 #include <QAction>
+#include <QActionGroup>
 #include <QApplication>
 #include <QContextMenuEvent>
 #include <QEvent>
@@ -118,97 +120,45 @@ CChatDoc* DocumentForMemberList(const CMemberList* memberList)
     return GetChatDoc();
 }
 
-bool HasComicSelection(CChatDoc* document)
-{
-    if (!document) return false;
-    int index = -1;
-    while (CUserInfo* pui = document->GetNextSelectedMember(index)) {
-        if (pui->IsComicUser()) return true;
-    }
-    return false;
-}
-
-bool IgnoreSelectionState(CChatDoc* document, bool* allIgnored)
-{
-    bool enabled = false;
-    bool ignored = true;
-    if (document) {
-        int index = -1;
-        while (CUserInfo* pui = document->GetNextSelectedMember(index)) {
-            if (pui->IsSelf()) continue;
-            enabled = true;
-            if (!pui->Ignored()) {
-                ignored = false;
-                break;
-            }
-        }
-    }
-    if (allIgnored) *allIgnored = enabled && ignored;
-    return enabled;
-}
-
 bool MemberCommandEnabled(const QString& command, CChatDoc* document)
 {
     if (!document) return false;
-    CUserInfo* single = document->GetSingleSelectedMember();
     if (command == QLatin1String("ID_MEMBER_GETINFO"))
-        return HasComicSelection(document);
+        return document->OnUpdateMemberGetinfo();
     if (command == QLatin1String("ID_MEMBER_IGNORE"))
-        return IgnoreSelectionState(document, nullptr);
+        return document->OnUpdateMemberIgnore();
     if (command == QLatin1String("ID_ADDTONOTIFICATIONS"))
-        return single && theApp.m_iAutoPage == -1
-            && !single->GetFullName().isEmpty();
+        return document->OnUpdateAddToNotifs();
     if (command == QLatin1String("ID_GETIDENTITY")
         || command == QLatin1String("ID_GET_VERSION")
         || command == QLatin1String("ID_PING_USER")
         || command == QLatin1String("ID_GET_LOCALTIME")) {
-        return document->GetConnectionStatus() == CX_INCHANNEL
-            && document->SelectedMemberCount() > 0;
+        return document->OnUpdateGetidentity();
     }
     if (command == QLatin1String("ID_SEND_EMAIL"))
-        return single && !single->IsSelf() && single->IsComicUser();
+        return document->OnUpdateComicUserNotSelf();
     if (command == QLatin1String("ID_WHISPERBOX_MLIST"))
-        return single && !single->IsSelf();
+        return document->OnUpdate1SelectionNotSelf();
     if (command == QLatin1String("ID_VISIT_HOMEPAGE"))
-        return single && single->IsComicUser();
-    if (command == QLatin1String("ID_MEMBER_GETCHAR")) {
-        if (!g_bCanViewUnrated
-            || document->GetConnectionStatus() != CX_INCHANNEL) {
-            return false;
-        }
-        int index = -1;
-        while (CUserInfo* pui = document->GetNextSelectedMember(index)) {
-            if (!pui->IsAvatarReal()) return true;
-        }
-        return false;
-    }
+        return document->OnUpdateVisitHomepage();
+    if (command == QLatin1String("ID_MEMBER_GETCHAR"))
+        return document->OnUpdateGetComicCharacter();
     if (command == QLatin1String("ID_ADMINISTRATOR_KICK"))
-        return single && !single->IsSelf();
-    if (command == QLatin1String("ID_ADMIN_BAN")) {
-        const int selected = document->m_memberList
-            ? document->SelectedMemberCount() : 2;
-        return selected < 2 && (!single || !single->IsSelf());
-    }
-    if (command == QLatin1String("ID_MAKEADMIN")
-        || command == QLatin1String("ID_MAKESPEAKER")) {
-        return single && document->m_puiSelf
-            && document->m_puiSelf->IsOperator()
-            && document->GetConnectionStatus() == CX_INCHANNEL;
-    }
-    if (command == QLatin1String("ID_MAKESPECTATOR")) {
-        return single && document->m_puiSelf
-            && document->m_puiSelf->IsOperator()
-            && document->GetConnectionStatus() == CX_INCHANNEL
-            && document->m_proto
-            && (document->m_proto->m_dwModes & CM_MODERATED);
-    }
+        return document->OnUpdate1SelectionNotSelf();
+    if (command == QLatin1String("ID_ADMIN_BAN"))
+        return document->OnUpdateAdminBan();
+    if (command == QLatin1String("ID_MAKEADMIN"))
+        return document->OnUpdateMakeadmin();
+    if (command == QLatin1String("ID_MAKESPEAKER"))
+        return document->OnUpdateMakespeaker();
+    if (command == QLatin1String("ID_MAKESPECTATOR"))
+        return document->OnUpdateMakespectator();
     if (command == QLatin1String("ID_VIEW_ICON"))
-        return document->m_bComicView;
+        return document->OnUpdateViewIcon();
     if (command == QLatin1String("ID_VIEW_LIST"))
-        return document->m_bComicView
-            && document->GetConnectionStatus() == CX_INCHANNEL;
+        return document->OnUpdateViewList();
     if (command == QLatin1String("ID_DEFINE_MACRO"))
-        return document->GetConnectionStatus() != CX_CONNECTING;
+        return true;
     if (command.startsWith(QLatin1String("ID_MACRO_A"))) {
         bool valid = false;
         const INT macro = command.mid(10).toInt(&valid);
@@ -260,7 +210,7 @@ void ExecuteMemberCommand(const QString& command, CChatDoc* document)
     else if (command == QLatin1String("ID_MAKESPECTATOR"))
         document->OnMakespectator();
     else if (command == QLatin1String("ID_VIEW_LIST"))
-        document->OnViewListAux();
+        document->OnViewList();
     else if (command == QLatin1String("ID_VIEW_ICON"))
         document->OnViewIcon();
     else if (command == QLatin1String("ID_DEFINE_MACRO"))
@@ -282,31 +232,37 @@ void ConfigureMemberAction(QAction* action, const QString& command,
     const bool enabled = MemberCommandEnabled(command, document);
     action->setEnabled(enabled);
     if (command == QLatin1String("ID_MEMBER_IGNORE")) {
-        bool allIgnored = false;
-        IgnoreSelectionState(document, &allIgnored);
+        BOOL allIgnored = FALSE;
+        if (document)
+            document->OnUpdateMemberIgnore(&allIgnored);
         action->setCheckable(true);
         action->setChecked(allIgnored);
     } else if (command == QLatin1String("ID_VIEW_ICON")) {
+        BOOL iconView = FALSE;
+        if (document) document->OnUpdateViewIcon(&iconView);
         action->setCheckable(true);
-        action->setChecked(document && document->m_bIconMembers);
+        action->setChecked(iconView);
     } else if (command == QLatin1String("ID_VIEW_LIST")) {
+        BOOL listView = FALSE;
+        if (document) document->OnUpdateViewList(FALSE, &listView);
         action->setCheckable(true);
-        action->setChecked(!document || !document->m_bIconMembers);
+        action->setChecked(listView);
     } else if (command == QLatin1String("ID_MAKEADMIN")) {
+        BOOL isAdmin = FALSE;
+        if (document) document->OnUpdateMakeadmin(&isAdmin);
         action->setCheckable(true);
-        action->setChecked(document && document->GetSingleSelectedMember()
-                           && document->GetSingleSelectedMember()->IsOperator());
+        action->setChecked(isAdmin);
     } else if (command == QLatin1String("ID_MAKESPEAKER")) {
-        CUserInfo* pui = document
-            ? document->GetSingleSelectedMember() : nullptr;
+        BOOL isSpeaker = FALSE;
+        if (document) document->OnUpdateMakespeaker(&isSpeaker);
         action->setCheckable(true);
-        action->setChecked(pui && pui->IsSpeaker()
-                           && !pui->IsOperator());
+        action->setChecked(isSpeaker);
     } else if (command == QLatin1String("ID_MAKESPECTATOR")) {
-        CUserInfo* pui = document
-            ? document->GetSingleSelectedMember() : nullptr;
+        BOOL isSpectator = FALSE;
+        if (document)
+            document->OnUpdateMakespectator(&isSpectator);
         action->setCheckable(true);
-        action->setChecked(pui && pui->IsSpectator());
+        action->setChecked(isSpectator);
     }
     if (enabled) {
         QObject::connect(action, &QAction::triggered, &menu,
@@ -332,6 +288,21 @@ void AppendMemberMenu(QMenu& menu, const QList<OriginalMenuItem>& items,
 
         QAction* action = menu.addAction(item.text);
         ConfigureMemberAction(action, item.commandIdentifier, document, menu);
+    }
+
+    for (const QStringList& commands : {
+             QStringList{QStringLiteral("ID_VIEW_LIST"),
+                         QStringLiteral("ID_VIEW_ICON")},
+             QStringList{QStringLiteral("ID_MAKEADMIN"),
+                         QStringLiteral("ID_MAKESPEAKER"),
+                         QStringLiteral("ID_MAKESPECTATOR")}}) {
+        auto* group = new QActionGroup(&menu);
+        group->setExclusive(true);
+        for (QAction* action : menu.actions()) {
+            if (commands.contains(action->data().toString()))
+                group->addAction(action);
+        }
+        if (group->actions().size() < 2) delete group;
     }
 }
 
@@ -429,6 +400,8 @@ void ShowMemberContext(int x, int y)
                    document);
     document->UpdateComicCharacterMenu(&menu);
     AddMacroMenu(menu);
+    if (theApp.m_pMainWnd)
+        theApp.m_pMainWnd->ConfigureContextMenu(&menu);
     if (!menu.actions().isEmpty()) menu.exec(QPoint(x, y));
 }
 
@@ -650,6 +623,8 @@ void CMemberList::OnContextMenu(const QPoint& listPoint,
         ShowMemberContext(globalPoint.x(), globalPoint.y());
         return;
     }
+    if (theApp.m_pMainWnd)
+        theApp.m_pMainWnd->ConfigureContextMenu(&menu);
     if (!menu.actions().isEmpty()) menu.exec(globalPoint);
 }
 

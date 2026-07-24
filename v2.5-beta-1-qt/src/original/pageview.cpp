@@ -13,6 +13,7 @@
 #include "histent.h"
 #include "intl.h"
 #include "ircproto.h"
+#include "mainfrm.h"
 #include "memblst.h"
 #include "originalassets.h"
 #include "paintdc.h"
@@ -20,6 +21,7 @@
 #include "userinfo.h"
 
 #include <QAction>
+#include <QActionGroup>
 #include <QApplication>
 #include <QContextMenuEvent>
 #include <QEvent>
@@ -677,6 +679,8 @@ void CPageView::OnContextMenu(QContextMenuEvent* event)
         AppendViewContextMenu(menu, resource);
     }
 
+    QActionGroup viewGroup(&menu);
+    viewGroup.setExclusive(true);
     QTextEdit* focusedEdit = qobject_cast<QTextEdit*>(
         QApplication::focusWidget());
     for (QAction* action : menu.actions()) {
@@ -685,11 +689,13 @@ void CPageView::OnContextMenu(QContextMenuEvent* event)
             action->setEnabled(focusedEdit
                 && focusedEdit->textCursor().hasSelection());
         } else if (command == QLatin1String("ID_VIEW_COMICS")) {
+            viewGroup.addAction(action);
             action->setCheckable(true);
             action->setChecked(m_doc && m_doc->m_bComicView);
             action->setEnabled(!m_doc || !m_doc->m_proto
                 || !(m_doc->m_proto->m_dwModes & CM_NOFORMAT));
         } else if (command == QLatin1String("ID_VIEW_TEXT")) {
+            viewGroup.addAction(action);
             action->setCheckable(true);
             action->setChecked(m_doc && !m_doc->m_bComicView);
         } else if (command == QLatin1String("ID_CHANNELPROPS")) {
@@ -699,6 +705,8 @@ void CPageView::OnContextMenu(QContextMenuEvent* event)
                 && !m_doc->m_allChannelPuis.isEmpty());
         }
     }
+    if (theApp.m_pMainWnd)
+        theApp.m_pMainWnd->ConfigureContextMenu(&menu);
     if (QAction* selected = menu.exec(screenPoint))
         ExecuteViewContextCommand(m_doc, selected->data().toString());
 }

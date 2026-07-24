@@ -1,4 +1,5 @@
 #include "avatar.h"
+#include "bodycam.h"
 #include "chat.h"
 #include "chatdoc.h"
 #include "histent.h"
@@ -10,15 +11,21 @@
 #include "panel.h"
 #include "saywnd.h"
 #include "setupdlg.h"
+#include "textview.h"
 #include "userinfo.h"
 
 #include <QApplication>
 #include <QAction>
 #include <QContextMenuEvent>
+#include <QDialog>
+#include <QGroupBox>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QListWidget>
 #include <QMenu>
+#include <QMessageBox>
 #include <QMouseEvent>
+#include <QPushButton>
 #include <QScrollBar>
 #include <QTimer>
 #include <QWidget>
@@ -38,6 +45,25 @@ void requireAt(bool condition, int line)
 }
 
 #define REQUIRE(condition) requireAt((condition), __LINE__)
+
+template<typename Invocation>
+BOOL invokeWithoutMessageBox(QApplication& application,
+                             Invocation invocation)
+{
+    bool messageBoxShown = false;
+    QTimer::singleShot(0, &application, [&] {
+        for (QWidget* widget : QApplication::topLevelWidgets()) {
+            auto* messageBox = qobject_cast<QMessageBox*>(widget);
+            if (!messageBox || !messageBox->isVisible()) continue;
+            messageBoxShown = true;
+            messageBox->reject();
+        }
+    });
+    const BOOL result = invocation();
+    application.processEvents();
+    REQUIRE(!messageBoxShown);
+    return result;
+}
 
 CUserInfo* otherUser(CChatDoc& document)
 {
@@ -140,7 +166,7 @@ void inspectContextPopup(QApplication& application, Trigger trigger,
     REQUIRE(inspected);
 }
 
-void sendKeyPress(CPageView* view, int key,
+void sendKeyPress(QWidget* view, int key,
                   Qt::KeyboardModifiers modifiers = Qt::NoModifier,
                   const QString& text = QString())
 {
@@ -161,6 +187,47 @@ int main(int argc, char** argv)
                                      theApp.m_comicsColor));
     InitializeBackDrops();
     InitializeAvatars();
+
+    bool aboutInspected = false;
+    QTimer::singleShot(0, &application, [&] {
+        auto* about = qobject_cast<QDialog*>(
+            QApplication::activeModalWidget());
+        REQUIRE(about != nullptr);
+        REQUIRE(about->objectName() == QStringLiteral("IDD_ABOUTBOX"));
+        REQUIRE(about->windowTitle() == originalDialogCaption(
+            QStringLiteral("IDD_ABOUTBOX")));
+
+        QLabel* tiki = about->findChild<QLabel*>(
+            QStringLiteral("IDC_TIKI"));
+        QLabel* version = about->findChild<QLabel*>(
+            QStringLiteral("IDC_VERSION"));
+        QLabel* warning = about->findChild<QLabel*>(
+            QStringLiteral("IDC_WARNING"));
+        QGroupBox* license = about->findChild<QGroupBox*>(
+            QStringLiteral("IDC_LICENSE"));
+        QPushButton* ok = about->findChild<QPushButton*>(
+            QStringLiteral("IDOK"));
+        REQUIRE(tiki != nullptr);
+        REQUIRE(!tiki->pixmap(Qt::ReturnByValue).isNull());
+        REQUIRE(version != nullptr);
+        QString versionText;
+        GetVersionString(versionText);
+        REQUIRE(version->text() == versionText);
+        REQUIRE(warning != nullptr);
+        REQUIRE(warning->text() == originalResourceString(
+            QStringLiteral("IDS_WARNING_TEXT")));
+        REQUIRE(license != nullptr);
+        REQUIRE(license->title() == originalDialogControlText(
+            QStringLiteral("IDD_ABOUTBOX"),
+            QStringLiteral("IDC_LICENSE")));
+        REQUIRE(ok != nullptr);
+        REQUIRE(ok->text() == originalDialogControlText(
+            QStringLiteral("IDD_ABOUTBOX"), QStringLiteral("IDOK")));
+        aboutInspected = true;
+        about->accept();
+    });
+    theApp.OnAppAbout();
+    REQUIRE(aboutInspected);
 
     QString selfAvatarName;
     QString otherAvatarName;
@@ -187,8 +254,32 @@ int main(int argc, char** argv)
         document.m_view = view;
         document.m_sayWnd = say;
         document.m_memberList = members;
+
+        auto* bodyCam = new CBodyCam(&host);
+        bodyCam->setGeometry(1170, 0, 240, 320);
         host.show();
         application.processEvents();
+
+        inspectContextPopup(application, [&] {
+            sendContextMenu(bodyCam, QContextMenuEvent::Keyboard,
+                            QPoint(-1, -1));
+        }, [&](QMenu* menu) {
+            REQUIRE(directCommands(menu) == QStringList({
+                QStringLiteral("ID_BODYCONTEXT_FREEZE"),
+                QStringLiteral("ID_BODYCONTEXT_SENDEXPRESSION")
+            }));
+            QAction* freeze = findCommand(
+                menu, QStringLiteral("ID_BODYCONTEXT_FREEZE"));
+            QAction* sendExpression = findCommand(
+                menu, QStringLiteral("ID_BODYCONTEXT_SENDEXPRESSION"));
+            REQUIRE(freeze != nullptr && freeze->isCheckable()
+                    && !freeze->isChecked());
+            REQUIRE(freeze->text() == originalMenuItemText(
+                QStringLiteral("ID_BODYCONTEXT_FREEZE")));
+            REQUIRE(sendExpression != nullptr);
+            REQUIRE(sendExpression->text() == originalMenuItemText(
+                QStringLiteral("ID_BODYCONTEXT_SENDEXPRESSION")));
+        });
 
         const QString nick = originalResourceString(
             QStringLiteral("IDS_DEFAULT_NICK"));
@@ -208,6 +299,21 @@ int main(int argc, char** argv)
         REQUIRE(g_puiSelf != nullptr);
         REQUIRE(other != nullptr);
         REQUIRE(members->count() == 2);
+
+        other->SetFlag(UF_AUTODOWNLOAD | UF_INTERACTIVEDOWNLOAD, true);
+        REQUIRE(!invokeWithoutMessageBox(application, [&] {
+            return theApp.StartDownloadingAvatar(other, &document, TRUE);
+        }));
+        REQUIRE(!other->CheckFlag(UF_AUTODOWNLOAD));
+        REQUIRE(!other->CheckFlag(UF_INTERACTIVEDOWNLOAD));
+        const QByteArray backdrop = originalResourceString(
+            QStringLiteral("IDS_DEFAULT_BACKDROP")).toUtf8();
+        const QByteArray artUrl = originalResourceString(
+            QStringLiteral("IDS_URL_MSPREFIX")).toUtf8();
+        REQUIRE(!invokeWithoutMessageBox(application, [&] {
+            return theApp.StartDownloadingBackdrop(
+                backdrop.constData(), artUrl.constData());
+        }));
 
         // This is the continuation text hard-coded by balloon.cpp itself.
         AddAndExecute(new SayEntry(other, QStringLiteral("..."),
@@ -508,6 +614,28 @@ int main(int argc, char** argv)
                 == view->verticalScrollBar()->maximum());
         sendKeyPress(view, Qt::Key_Home);
         REQUIRE(view->verticalScrollBar()->value() == 0);
+
+        sendKeyPress(say->GetSayEdit(), Qt::Key_PageDown);
+        REQUIRE(view->verticalScrollBar()->value() > 0);
+
+        auto* textView = new CTextView(&document, &host);
+        textView->setGeometry(1420, 0, 300, 180);
+        textView->show();
+        document.m_bComicView = false;
+        document.m_textView = textView;
+        QString textHistory;
+        for (int line = 0; line < 80; ++line) {
+            if (!textHistory.isEmpty()) textHistory += QLatin1Char('\n');
+            textHistory += sourceText;
+        }
+        textView->m_pRichEdit->setPlainText(textHistory);
+        application.processEvents();
+        REQUIRE(textView->m_pRichEdit->verticalScrollBar()->maximum() > 0);
+        textView->m_pRichEdit->verticalScrollBar()->setValue(0);
+        sendKeyPress(say->GetSayEdit(), Qt::Key_PageDown);
+        REQUIRE(textView->m_pRichEdit->verticalScrollBar()->value() > 0);
+        delete textView;
+        document.m_bComicView = true;
 
         const QList<HistoryEntry*> historyBefore = document.m_history;
         view->SetPanelsWide(1);

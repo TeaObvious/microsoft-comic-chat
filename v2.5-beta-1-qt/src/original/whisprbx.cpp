@@ -5,6 +5,7 @@
 #include "chat.h"
 #include "chatdoc.h"
 #include "ircproto.h"
+#include "mainfrm.h"
 #include "originalassets.h"
 #include "protsupp.h"
 #include "resource.h"
@@ -544,6 +545,8 @@ void CWhisperBox::OnContextMenu(const QPoint& screenPoint)
             action->setEnabled(edit && edit->textCursor().hasSelection());
         }
     }
+    if (theApp.m_pMainWnd)
+        theApp.m_pMainWnd->ConfigureContextMenu(&menu);
     const QPoint point = screenPoint.x() == -1 && screenPoint.y() == -1
         ? mapToGlobal(rect().center()) : screenPoint;
     if (QAction* selected = menu.exec(point)) {
@@ -599,8 +602,10 @@ bool CWhisperBox::eventFilter(QObject* watched, QEvent* event)
         if (key->key() == Qt::Key_Escape) return true;
         if ((key->modifiers() & Qt::AltModifier)
             && key->key() >= Qt::Key_0 && key->key() <= Qt::Key_9) {
-            theApp.m_macros[key->key() - Qt::Key_0].Invoke(
-                nullptr, nullptr, FALSE, TRUE);
+            if (m_currentIndex >= 0) {
+                theApp.m_macros[key->key() - Qt::Key_0].Invoke(
+                    nullptr, nullptr, FALSE, TRUE);
+            }
             return true;
         }
     }

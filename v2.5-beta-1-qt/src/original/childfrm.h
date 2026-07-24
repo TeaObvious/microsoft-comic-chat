@@ -7,6 +7,11 @@
 class CChatDoc;
 class CChatView;
 class QCloseEvent;
+class QEvent;
+class QHideEvent;
+class QMoveEvent;
+class QResizeEvent;
+class QShowEvent;
 
 class CChildFrame : public QMdiSubWindow {
 public:
@@ -16,13 +21,19 @@ public:
 
     CChatDoc* GetDocument() const { return m_document; }
     CChatView* GetChatView() const { return m_view; }
-    void ActivateFrame();
+    void ActivateFrame(bool activate = true);
     void SetDocumentTitle(const QString& title);
+    void setVisible(bool visible) override;
 
     bool m_bPositioned = false;
 
 protected:
     void closeEvent(QCloseEvent* event) override;
+    void changeEvent(QEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
+    void moveEvent(QMoveEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
+    void showEvent(QShowEvent* event) override;
 
 private:
     CChatDoc* m_document = nullptr;

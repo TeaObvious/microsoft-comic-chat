@@ -24,9 +24,13 @@
 #include "whisprbx.h"
 #include "originalassets.h"
 
-#include <QMessageBox>
 #include <QAction>
+#include <QApplication>
+#include <QClipboard>
 #include <QMenu>
+#include <QMessageBox>
+#include <QMimeData>
+#include <QTextEdit>
 #include <QTextStream>
 #include <QTimer>
 #include <QWidget>
@@ -52,9 +56,17 @@ CChatDoc::CChatDoc()
 
 CChatDoc::~CChatDoc()
 {
+    const bool ownedCurrentRoom = currentRoom == m_proto;
     g_docs.removeOne(this);
     if (g_doc == this) {
         g_doc = g_docs.isEmpty() ? nullptr : g_docs.first();
+        if (g_doc) g_doc->LoadDocData();
+        else {
+            currentRoom = nullptr;
+            g_puiSelf = nullptr;
+            g_mapNickToPtr = nullptr;
+        }
+    } else if (ownedCurrentRoom) {
         if (g_doc) g_doc->LoadDocData();
         else {
             currentRoom = nullptr;
@@ -90,6 +102,85 @@ void CChatDoc::OnSetfont()
 {
     if (m_bComicView) SetComicsFont();
     else SetTextFont();
+}
+
+void CChatDoc::OnSetColor()
+{
+    if (auto* say = dynamic_cast<CSayWnd*>(m_sayWnd))
+        say->SwitchSelectionFormat(wForeground);
+}
+
+void CChatDoc::OnSwitchBold()
+{
+    if (auto* say = dynamic_cast<CSayWnd*>(m_sayWnd))
+        say->SwitchSelectionFormat(wBold);
+}
+
+void CChatDoc::OnSwitchItalic()
+{
+    if (auto* say = dynamic_cast<CSayWnd*>(m_sayWnd))
+        say->SwitchSelectionFormat(wItalic);
+}
+
+void CChatDoc::OnSwitchUnderlined()
+{
+    if (auto* say = dynamic_cast<CSayWnd*>(m_sayWnd))
+        say->SwitchSelectionFormat(wUnderline);
+}
+
+void CChatDoc::OnSwitchFixedPitch()
+{
+    if (auto* say = dynamic_cast<CSayWnd*>(m_sayWnd))
+        say->SwitchSelectionFormat(wFixedPitch);
+}
+
+void CChatDoc::OnSwitchSymbol()
+{
+    if (auto* say = dynamic_cast<CSayWnd*>(m_sayWnd))
+        say->SwitchSelectionFormat(wSymbol);
+}
+
+BOOL CChatDoc::OnUpdateFormat(UINT commandID, BOOL* checked) const
+{
+    auto* say = dynamic_cast<CSayWnd*>(m_sayWnd);
+    if (checked) *checked = FALSE;
+    if (!say) return FALSE;
+
+    const WORD formats = say->wGetConsistentFormats();
+    WORD mask = 0;
+    switch (commandID) {
+    case ID_SWITCHBOLD:
+        mask = wBold;
+        break;
+    case ID_SWITCHITALIC:
+        mask = wItalic;
+        break;
+    case ID_SWITCHUNDERLINED:
+        mask = wUnderline;
+        break;
+    case ID_SWITCHFIXEDPITCH:
+        mask = wFixedPitch;
+        break;
+    case ID_SWITCHSYMBOL:
+        mask = wSymbol;
+        break;
+    case ID_SETCOLOR:
+        break;
+    default:
+        return FALSE;
+    }
+    if (checked && mask) *checked = (formats & mask) != 0;
+    return TRUE;
+}
+
+void CChatDoc::OnFileClose()
+{
+    if (!theApp.m_pMainWnd) return;
+    if (m_bStatusView) {
+        theApp.OnViewStatuswindow();
+        return;
+    }
+    theApp.m_pMainWnd->CloseDocument(this);
 }
 
 void CChatDoc::OnMemberGetinfo()
@@ -130,6 +221,41 @@ void CChatDoc::OnAddToNotifs()
     theApp.m_dynaNotifs.SetStartUpIdent(pui->GetFullName());
     theApp.m_iAutoPage = 1;
     QTimer::singleShot(0, [] { theApp.OnViewAutomations(); });
+}
+
+BOOL CChatDoc::OnUpdateMemberGetinfo() const
+{
+    int index = -1;
+    while (CUserInfo* pui = GetNextSelectedMember(index)) {
+        if (pui->IsComicUser()) return TRUE;
+    }
+    return FALSE;
+}
+
+BOOL CChatDoc::OnUpdateMemberIgnore(BOOL* checked) const
+{
+    BOOL enabled = FALSE;
+    BOOL allIgnored = TRUE;
+    int index = -1;
+    while (CUserInfo* pui = GetNextSelectedMember(index)) {
+        if (pui->IsSelf()) continue;
+        enabled = TRUE;
+        if (!pui->Ignored()) {
+            allIgnored = FALSE;
+            break;
+        }
+    }
+    if (checked) *checked = enabled && allIgnored;
+    return enabled;
+}
+
+BOOL CChatDoc::OnUpdateAddToNotifs() const
+{
+    if (SelectedMemberCount() != 1 || theApp.m_iAutoPage != -1)
+        return FALSE;
+    int index = -1;
+    CUserInfo* pui = GetNextSelectedMember(index);
+    return pui && !pui->GetFullName().isEmpty();
 }
 
 void CChatDoc::OnGetidentity()
@@ -190,6 +316,24 @@ void CChatDoc::OnVisitHomepage()
     if (pui && m_proto) m_proto->ChatGetHomePage(pui);
 }
 
+BOOL CChatDoc::OnUpdate1SelectionNotSelf() const
+{
+    CUserInfo* pui = GetSingleSelectedMember();
+    return pui && !pui->IsSelf();
+}
+
+BOOL CChatDoc::OnUpdateComicUserNotSelf() const
+{
+    CUserInfo* pui = GetSingleSelectedMember();
+    return pui && !pui->IsSelf() && pui->IsComicUser();
+}
+
+BOOL CChatDoc::OnUpdateVisitHomepage() const
+{
+    CUserInfo* pui = GetSingleSelectedMember();
+    return pui && pui->IsComicUser();
+}
+
 void CChatDoc::OnAdministratorKick()
 {
     CUserInfo* pui = GetSingleSelectedMember();
@@ -201,9 +345,40 @@ void CChatDoc::OnAdminBan()
     if (m_proto) m_proto->ChatBanUser(GetSingleSelectedMember());
 }
 
+BOOL CChatDoc::OnUpdateAdminBan() const
+{
+    CUserInfo* pui = nullptr;
+    int selected = 2;
+    if (m_memberList) {
+        selected = SelectedMemberCount();
+        if (selected == 1) pui = GetSingleSelectedMember();
+    }
+    return selected < 2 && (!pui || !pui->IsSelf());
+}
+
+void CChatDoc::OnAdminBgrndsync()
+{
+    if (!m_bComicView || !m_proto) return;
+    const char* backdropName =
+        GetBackDropNameFromID(m_myBackDropID);
+    const char* backdropUrl =
+        GetBackDropURLFromID(m_myBackDropID);
+    if (backdropName) {
+        m_proto->ChatSyncBackDrop(
+            this, QString::fromLocal8Bit(backdropName),
+            backdropUrl ? QString::fromLocal8Bit(backdropUrl)
+                        : QString());
+    }
+}
+
 void CChatDoc::OnInvite()
 {
     if (m_proto) m_proto->ChatInvite();
+}
+
+BOOL CChatDoc::OnUpdateInvite() const
+{
+    return bCanInvite();
 }
 
 void CChatDoc::OnMakeadmin()
@@ -227,18 +402,81 @@ void CChatDoc::OnMakespectator()
         m_proto->ChatSetOperator(pui, UM_SPECTATOR);
 }
 
+BOOL CChatDoc::OnUpdateMakeadmin(BOOL* checked) const
+{
+    CUserInfo* pui = GetSingleSelectedMember();
+    if (checked) *checked = pui && pui->IsOperator();
+    return pui && g_puiSelf && g_puiSelf->IsOperator()
+        && GetConnectionStatus() == CX_INCHANNEL;
+}
+
+BOOL CChatDoc::OnUpdateMakespeaker(BOOL* checked) const
+{
+    CUserInfo* pui = GetSingleSelectedMember();
+    if (checked)
+        *checked = pui && pui->IsSpeaker() && !pui->IsOperator();
+    return pui && g_puiSelf && g_puiSelf->IsOperator()
+        && GetConnectionStatus() == CX_INCHANNEL;
+}
+
+BOOL CChatDoc::OnUpdateMakespectator(BOOL* checked) const
+{
+    CUserInfo* pui = GetSingleSelectedMember();
+    if (checked) *checked = pui && pui->IsSpectator();
+    return pui && g_puiSelf && g_puiSelf->IsOperator()
+        && GetConnectionStatus() == CX_INCHANNEL && m_proto
+        && (m_proto->m_dwModes & CM_MODERATED);
+}
+
 void CChatDoc::OnChannelprops()
 {
     if (m_proto) m_proto->DoChannelDialog();
 }
 
+BOOL CChatDoc::OnUpdateChannelprops() const
+{
+    return GetConnectionStatus() == CX_INCHANNEL && g_puiSelf
+        && m_puiSelf && !m_allChannelPuis.isEmpty();
+}
+
+BOOL CChatDoc::OnUpdateAdminBgrndsync() const
+{
+    return GetConnectionStatus() == CX_INCHANNEL && m_bComicView;
+}
+
+BOOL CChatDoc::OnUpdateGetidentity() const
+{
+    return GetConnectionStatus() == CX_INCHANNEL
+        && SelectedMemberCount() > 0;
+}
+
+BOOL CChatDoc::OnUpdateGetComicCharacter() const
+{
+    if (!g_bCanViewUnrated
+        || GetConnectionStatus() != CX_INCHANNEL
+        || SelectedMemberCount() == 0) {
+        return FALSE;
+    }
+    int index = -1;
+    while (CUserInfo* pui = GetNextSelectedMember(index)) {
+        if (!pui->IsAvatarReal()) return TRUE;
+    }
+    return FALSE;
+}
+
 void CChatDoc::OnLeave()
 {
-    if (theApp.m_pMainWnd) {
-        theApp.m_pMainWnd->CloseDocument(this);
-    } else if (m_proto) {
-        m_proto->ChatPartChannel(this, false);
-    }
+    OnFileClose();
+}
+
+BOOL CChatDoc::OnUpdateFilePrint() const
+{
+    return TRUE;
+}
+
+BOOL CChatDoc::OnUpdateLeave() const
+{
+    return GetConnectionStatus() == CX_INCHANNEL;
 }
 
 ConnectionStatus CChatDoc::GetConnectionStatus() const
@@ -294,6 +532,7 @@ void CChatDoc::SaveConnectStatus(const QString& status)
 
 void CChatDoc::ResetStatus(bool left, bool right)
 {
+    if (GetChatDoc() != this) return;
     if (left) {
         theApp.SetStatusPaneString(0, m_strStatus);
     }
@@ -305,6 +544,156 @@ void CChatDoc::ResetStatus(bool left, bool right)
         memberText.replace(QStringLiteral("%1"), QString::number(members));
         theApp.SetStatusPaneString(1, memberText);
     }
+}
+
+void CChatDoc::RegisterNewContent()
+{
+    if (m_bNewContent || !theApp.m_pMainWnd
+        || !theApp.m_pMainWnd->GetTabBar()) {
+        return;
+    }
+    if (!m_bObscured) return;
+    CTabBar* tabBar = theApp.m_pMainWnd->GetTabBar();
+    tabBar->SetTabIcon(tabBar->FindTabNum(this),
+                       m_bStatusView ? 3 : 1);
+    m_bNewContent = true;
+}
+
+void CChatDoc::SetObscured(BOOL obscured)
+{
+    if (obscured == m_bObscured) return;
+    if (m_bNewContent && !obscured) {
+        if (theApp.m_pMainWnd && theApp.m_pMainWnd->GetTabBar()) {
+            CTabBar* tabBar = theApp.m_pMainWnd->GetTabBar();
+            tabBar->SetTabIcon(tabBar->FindTabNum(this),
+                               m_bStatusView ? 2 : 0);
+        }
+        m_bNewContent = false;
+    }
+    m_bObscured = obscured;
+}
+
+QTextEdit* CChatDoc::GetFocusSayOrEdit(BOOL sayOnly) const
+{
+    QWidget* focused = theApp.m_pMainWnd
+        ? theApp.m_pMainWnd->GetCommandFocusWidget()
+        : QApplication::focusWidget();
+    QTextEdit* candidates[4] = {nullptr, nullptr, nullptr, nullptr};
+
+    if (auto* sayWindow = dynamic_cast<CSayWnd*>(m_sayWnd))
+        candidates[0] = sayWindow->GetSayEdit();
+    if (!sayOnly && !m_bComicView && m_textView)
+        candidates[1] = m_textView->m_pRichEdit;
+
+    if (CWhisperBox* whisper = GetWhisperBox()) {
+        if (whisper->m_sayWnd)
+            candidates[2] = whisper->m_sayWnd->GetSayEdit();
+        if (!sayOnly) candidates[3] = whisper->GetCurrentEdit();
+    }
+
+    for (QTextEdit* candidate : candidates) {
+        if (candidate && candidate == focused) return candidate;
+    }
+    return nullptr;
+}
+
+void CChatDoc::OnEditUndo()
+{
+    if (QTextEdit* edit = GetFocusSayOrEdit(TRUE)) edit->undo();
+}
+
+void CChatDoc::OnEditCut()
+{
+    if (QTextEdit* edit = GetFocusSayOrEdit(TRUE)) edit->cut();
+}
+
+void CChatDoc::OnEditCopy()
+{
+    if (QTextEdit* edit = GetFocusSayOrEdit(FALSE)) edit->copy();
+}
+
+void CChatDoc::OnEditPaste()
+{
+    if (QTextEdit* edit = GetFocusSayOrEdit(TRUE)) edit->paste();
+}
+
+void CChatDoc::OnEditDelete()
+{
+    if (QTextEdit* edit = GetFocusSayOrEdit(TRUE)) {
+        QTextCursor cursor = edit->textCursor();
+        cursor.removeSelectedText();
+    }
+}
+
+void CChatDoc::OnEditSelectAll()
+{
+    if (QTextEdit* edit = GetFocusSayOrEdit(FALSE)) edit->selectAll();
+}
+
+BOOL CChatDoc::OnUpdateEditUndo() const
+{
+    QTextEdit* edit = GetFocusSayOrEdit(TRUE);
+    return edit && edit->document()->isUndoAvailable();
+}
+
+BOOL CChatDoc::OnUpdateEditCut() const
+{
+    QTextEdit* edit = GetFocusSayOrEdit(TRUE);
+    return edit && edit->textCursor().hasSelection();
+}
+
+BOOL CChatDoc::OnUpdateEditCopy() const
+{
+    QTextEdit* edit = GetFocusSayOrEdit(FALSE);
+    return edit && edit->textCursor().hasSelection();
+}
+
+BOOL CChatDoc::OnUpdateEditPaste() const
+{
+    QTextEdit* edit = GetFocusSayOrEdit(TRUE);
+    const QClipboard* clipboard = QApplication::clipboard();
+    const QMimeData* data = clipboard ? clipboard->mimeData() : nullptr;
+    return edit && data && data->hasText();
+}
+
+BOOL CChatDoc::OnUpdateEditDelete() const
+{
+    return OnUpdateEditCut();
+}
+
+BOOL CChatDoc::OnUpdateEditSelectAll() const
+{
+    return GetFocusSayOrEdit(FALSE) != nullptr;
+}
+
+void CChatDoc::OnActionsSay()
+{
+    if (auto* say = dynamic_cast<CSayWnd*>(m_sayWnd))
+        say->OnActionsSay();
+}
+
+void CChatDoc::OnActionsThink()
+{
+    if (auto* say = dynamic_cast<CSayWnd*>(m_sayWnd))
+        say->OnActionsThink();
+}
+
+void CChatDoc::OnActionsWhisper()
+{
+    if (auto* say = dynamic_cast<CSayWnd*>(m_sayWnd))
+        say->OnActionsWhisper();
+}
+
+void CChatDoc::OnSendAction()
+{
+    if (auto* say = dynamic_cast<CSayWnd*>(m_sayWnd))
+        say->OnSendAction();
+}
+
+void CChatDoc::UpdateAdminMenu()
+{
+    if (theApp.m_pMainWnd)
+        theApp.m_pMainWnd->UpdateAdminMenu(this);
 }
 
 void CChatDoc::InitHistory()
@@ -531,13 +920,38 @@ void CChatDoc::CycleFocus(UINT currentFocus, bool backward)
     if (index == 6) return;
     do {
         index = (index + (backward ? 5 : 1)) % 6;
-    } while (!(applicableTypes[index] & currentType));
+    } while (!(applicableTypes[index] & currentType)
+             || (tabOrder[index] == CHATFOCUS_TABBAR
+                 && theApp.m_bEmbedded));
 
     QWidget* next = GetComponentWindow(tabOrder[index]);
     if (!next) return;
     if (tabOrder[index] == CHATFOCUS_MEMBERLIST && m_memberList)
         m_memberList->EnsureFocusItem();
     next->setFocus();
+}
+
+void CChatDoc::OnViewComics()
+{
+    if (m_bComicView) return;
+
+    theApp.m_bFoundArt = ArtDirsOK();
+    if (!theApp.m_bFoundArt) {
+        if (QMessageBox::question(
+                m_client,
+                originalResourceString(
+                    QStringLiteral("ID_MESSAGE_BOX_TITLE")),
+                originalResourceString(QStringLiteral("IDS_NEEDART")),
+                QMessageBox::Yes | QMessageBox::No,
+                QMessageBox::No) == QMessageBox::Yes) {
+            theApp.OnHelpFreestuff();
+        }
+        return;
+    }
+
+    MapNullAvatars(this);
+    if (m_client) m_client->CreateComicView(true);
+    UpdateComicCharacterMenu();
 }
 
 void CChatDoc::OnViewIcon()
@@ -550,10 +964,16 @@ void CChatDoc::OnViewIcon()
 
 void CChatDoc::OnViewListAux()
 {
-    theApp.m_bIconMembers = m_bIconMembers = false;
+    m_bIconMembers = false;
     if (m_memberList) {
         m_memberList->SetIconMode(false);
     }
+}
+
+void CChatDoc::OnViewList()
+{
+    OnViewListAux();
+    theApp.m_bIconMembers = false;
 }
 
 void CChatDoc::OnViewText()
@@ -562,6 +982,32 @@ void CChatDoc::OnViewText()
     theApp.m_bComicView = false;
     m_bComicView = false;
     if (m_client) m_client->CreateTextView(true);
+    UpdateComicCharacterMenu();
+}
+
+BOOL CChatDoc::OnUpdateViewComics(BOOL* checked) const
+{
+    if (checked) *checked = m_bComicView;
+    return !m_proto || !(m_proto->m_dwModes & CM_NOFORMAT);
+}
+
+BOOL CChatDoc::OnUpdateViewText(BOOL* checked) const
+{
+    if (checked) *checked = !m_bComicView;
+    return TRUE;
+}
+
+BOOL CChatDoc::OnUpdateViewIcon(BOOL* checked) const
+{
+    if (checked) *checked = m_bComicView && m_bIconMembers;
+    return m_bComicView;
+}
+
+BOOL CChatDoc::OnUpdateViewList(BOOL submenu, BOOL* checked) const
+{
+    if (checked) *checked = !m_bIconMembers;
+    if (!submenu) return TRUE;
+    return GetConnectionStatus() == CX_INCHANNEL && m_bComicView;
 }
 
 void CChatDoc::OnMacro(UINT commandID)
@@ -598,7 +1044,13 @@ void CChatDoc::UpdateMacroMenu()
 
 void CChatDoc::UpdateComicCharacterMenu(QMenu* menu)
 {
-    if (!menu) return;
+    if (!menu) {
+        if (theApp.m_pMainWnd
+            && theApp.m_pMainWnd->GetActiveDocument() == this) {
+            theApp.m_pMainWnd->RefreshCommandUi();
+        }
+        return;
+    }
 
     QAction* characterAction = nullptr;
     for (QAction* action : menu->actions()) {
@@ -610,10 +1062,17 @@ void CChatDoc::UpdateComicCharacterMenu(QMenu* menu)
     }
 
     const BOOL needsCharacterItem = bCanViewUnrated() && m_bComicView;
+    const bool registeredMainMenu = theApp.m_pMainWnd
+        && theApp.m_pMainWnd->IsRegisteredMemberMenu(menu);
     if (!needsCharacterItem) {
         if (characterAction) {
-            menu->removeAction(characterAction);
-            delete characterAction;
+            if (registeredMainMenu)
+                theApp.m_pMainWnd->RemoveDynamicCommand(
+                    menu, characterAction);
+            else {
+                menu->removeAction(characterAction);
+                delete characterAction;
+            }
         }
         return;
     }
@@ -630,18 +1089,27 @@ void CChatDoc::UpdateComicCharacterMenu(QMenu* menu)
                 break;
             }
         }
-        characterAction = new QAction(originalResourceString(
-            QStringLiteral("IDS_GET_CHARACTER")), menu);
-        characterAction->setData(QStringLiteral("ID_MEMBER_GETCHAR"));
-        characterAction->setStatusTip(originalResourceString(
-            QStringLiteral("ID_MEMBER_GETCHAR")).section(
-                QLatin1Char('\n'), 0, 0));
-        menu->insertAction(insertBefore, characterAction);
-        QObject::connect(characterAction, &QAction::triggered, menu,
-                         [] {
-                             if (CChatDoc* document = GetChatDoc())
-                                 document->OnGetComicCharacter();
-                         });
+        const QString text = originalResourceString(
+            QStringLiteral("IDS_GET_CHARACTER"));
+        if (registeredMainMenu) {
+            characterAction =
+                theApp.m_pMainWnd->InsertDynamicCommand(
+                    menu, insertBefore, text,
+                    QStringLiteral("ID_MEMBER_GETCHAR"));
+        } else {
+            characterAction = new QAction(text, menu);
+            characterAction->setData(
+                QStringLiteral("ID_MEMBER_GETCHAR"));
+            characterAction->setStatusTip(originalResourceString(
+                QStringLiteral("ID_MEMBER_GETCHAR")).section(
+                    QLatin1Char('\n'), 0, 0));
+            menu->insertAction(insertBefore, characterAction);
+            QObject::connect(characterAction, &QAction::triggered,
+                             menu, [] {
+                if (CChatDoc* document = GetChatDoc())
+                    document->OnGetComicCharacter();
+            });
+        }
     }
 
     BOOL enabled = FALSE;

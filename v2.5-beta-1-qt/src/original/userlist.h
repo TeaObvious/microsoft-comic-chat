@@ -11,12 +11,12 @@
 #include <QTreeWidget>
 
 class CUserInfo;
+class QFocusEvent;
 class QLabel;
 class QLineEdit;
 class QPushButton;
 class QRadioButton;
 class QShowEvent;
-class QKeyEvent;
 class QWidget;
 
 class CUser {
@@ -91,6 +91,9 @@ public:
     CUser* GetSelectedUser() const;
     QString GetSelectedNickname() const;
 
+protected:
+    void focusInEvent(QFocusEvent* event) override;
+
 private:
     CUserList* m_userList = nullptr;
 };
@@ -137,12 +140,11 @@ public:
 
 protected:
     void showEvent(QShowEvent* event) override;
-    void keyPressEvent(QKeyEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     void initializeDialog();
     void setSearchType(int searchType);
-    bool canInvite() const;
 
     QRadioButton* m_searchAll = nullptr;
     QRadioButton* m_searchNick = nullptr;
@@ -153,4 +155,3 @@ private:
     QWidget* m_group = nullptr;
     bool m_bInitialized = false;
 };
-

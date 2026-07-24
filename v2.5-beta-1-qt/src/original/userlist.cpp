@@ -12,9 +12,11 @@
 #include "setupdlg.h"
 #include "userinfo.h"
 
+#include <QFocusEvent>
 #include <QFontMetrics>
 #include <QGroupBox>
 #include <QHeaderView>
+#include <QItemSelectionModel>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
@@ -24,6 +26,7 @@
 #include <QRadioButton>
 #include <QShowEvent>
 #include <QTime>
+#include <QTimer>
 
 #include <algorithm>
 
@@ -186,6 +189,7 @@ CUserListCtrl::CUserListCtrl(CUserList* parent)
     setSelectionBehavior(QAbstractItemView::SelectRows);
     setSortingEnabled(false);
     header()->setSectionsClickable(true);
+    header()->setStretchLastSection(false);
     QObject::connect(header(), &QHeaderView::sectionClicked, this,
                      [this](int column) {
         CUserListPersist* persist = m_userList->m_persist;
@@ -214,6 +218,15 @@ QString CUserListCtrl::GetSelectedNickname() const
 {
     CUser* user = GetSelectedUser();
     return user ? user->m_strNickname : QString();
+}
+
+void CUserListCtrl::focusInEvent(QFocusEvent* event)
+{
+    if (!currentItem() && topLevelItemCount() > 0) {
+        setCurrentItem(topLevelItem(0), 0,
+                       QItemSelectionModel::NoUpdate);
+    }
+    QTreeWidget::focusInEvent(event);
 }
 
 CUserList::CUserList(CUserListPersist* persist, QWidget* parent)
@@ -317,6 +330,10 @@ CUserList::CUserList(CUserListPersist* persist, QWidget* parent)
             this, &CUserList::OnChangeRoomEdit);
     connect(m_userListCtrl, &QTreeWidget::itemSelectionChanged,
             this, &CUserList::OnItemchangedUserlist);
+
+    installEventFilter(this);
+    for (QWidget* control : findChildren<QWidget*>())
+        control->installEventFilter(this);
 }
 
 CUserList::~CUserList()
@@ -448,15 +465,6 @@ void CUserList::AnnounceTime()
     m_searchTime->setText(m_persist->m_searchTime);
 }
 
-bool CUserList::canInvite() const
-{
-    CChatDoc* doc = GetChatDoc();
-    return doc && doc->GetConnectionStatus() == CX_INCHANNEL
-        && doc->m_puiSelf
-        && (doc->m_puiSelf->IsOperator()
-            || !(doc->m_proto->m_dwModes & CM_INVITEONLY));
-}
-
 void CUserList::OnItemchangedUserlist()
 {
     CUser* user = m_userListCtrl->GetSelectedUser();
@@ -470,7 +478,7 @@ void CUserList::OnItemchangedUserlist()
         CUserInfo* pui = LookupPui(selectedNick, doc);
         inCurrentRoom = pui && !pui->IsDeparted();
     }
-    m_invite->setEnabled(isOther && canInvite() && !inCurrentRoom);
+    m_invite->setEnabled(isOther && bCanInvite() && !inCurrentRoom);
 
     m_message->setEnabled(isOther);
 
@@ -542,12 +550,18 @@ void CUserList::OnChangeRoomEdit()
     m_persist->m_strEncRoom.clear();
 }
 
-void CUserList::keyPressEvent(QKeyEvent* event)
+bool CUserList::eventFilter(QObject* watched, QEvent* event)
 {
-    if (event->key() == Qt::Key_F5) {
-        if (!event->isAutoRepeat()) OnResetList();
-        event->accept();
-        return;
+    if (event->type() == QEvent::KeyPress
+        || event->type() == QEvent::KeyRelease) {
+        auto* keyEvent = static_cast<QKeyEvent*>(event);
+        if (keyEvent->key() == Qt::Key_F5) {
+            if (event->type() == QEvent::KeyPress
+                && !keyEvent->isAutoRepeat()) {
+                QTimer::singleShot(0, this, &CUserList::OnResetList);
+            }
+            return true;
+        }
     }
-    QDialog::keyPressEvent(event);
+    return QDialog::eventFilter(watched, event);
 }

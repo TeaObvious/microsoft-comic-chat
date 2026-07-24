@@ -22,6 +22,7 @@ extern CRoomInfo g_enterInfo;
 extern CRoomInfo* currentRoom;
 extern SHORT g_nCXKeepServer;
 extern BOOL g_bCXPrompt;
+extern BOOL g_bFreezeTabs;
 extern BOOL g_bEnterOnCreate;
 extern BOOL g_bCanViewUnrated;
 
@@ -45,6 +46,7 @@ void AddToUserList(CUser* user);
 CUser* CreateUserFromWhoReply(IRCPARSE* parse);
 bool bCanDance();
 CRoomInfo* GetDefaultProto();
+QString GetMyServerPrettyName();
 
 unsigned char IndexToByte(unsigned char byteIn);
 unsigned char ByteToIndex(unsigned char byteIn);
@@ -66,6 +68,7 @@ int AddToImageList(CUserInfo* pui);
 int FindMemberListIndex(CUserInfo* pui, CChatDoc* doc = nullptr);
 int RemoveMemberFromList(CUserInfo* pui);
 void AddToMembersList(CUserInfo* pui, CChatDoc* doc = nullptr);
+void MapNullAvatars(CChatDoc* doc);
 void CIUserPart(const QString& nickname, CChatDoc* doc = nullptr);
 void ProcessNick(CChatDoc* doc, const QString& oldNick, const QString& newNick,
                  bool updateMemberList = true);

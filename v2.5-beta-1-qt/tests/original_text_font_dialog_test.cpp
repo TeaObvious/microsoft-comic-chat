@@ -1,8 +1,12 @@
 #include "chat.h"
+#include "backdrop.h"
+#include "bodycam.h"
 #include "colordlg.h"
 #include "format.h"
 #include "originalassets.h"
+#include "panel.h"
 #include "proppage.h"
+#include "protsupp.h"
 #include "resource.h"
 #include "textcore.h"
 #include "txtfntdg.h"
@@ -10,6 +14,8 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDialogButtonBox>
+#include <QFileInfo>
 #include <QFontDialog>
 #include <QFontMetrics>
 #include <QKeyEvent>
@@ -22,6 +28,7 @@
 #include <QTabWidget>
 #include <QTextEdit>
 #include <QTimer>
+#include <QValidator>
 
 #include <array>
 #include <cstdio>
@@ -117,6 +124,443 @@ int main(int argc, char** argv)
     QApplication application(argc, argv);
     theApp.InitVals();
     theApp.InitializeFonts();
+
+    {
+        const bool sendComicsDataBefore = GetSendComicsData();
+        const bool promptBefore = theApp.m_bPrompt;
+        const bool whispersBefore = theApp.m_bAcceptWhispers;
+        const bool soundsBefore = theApp.m_bPlaySounds;
+        const bool arrivalsBefore = theApp.m_bShowArrivals;
+        const bool identityBefore = theApp.m_bShowIdentity;
+        const bool invitesBefore = theApp.m_bAllowInvites;
+        const bool fileTxBefore = theApp.m_bAllowFileTX;
+        const bool nmBefore = theApp.m_bAcceptNMCalls;
+        const QString soundPathBefore = theApp.m_soundPath;
+
+        CSettingsPage settings;
+        const OriginalDialogResource resource = originalDialogResource(
+            QStringLiteral("IDD_SETTINGSPAGE"));
+        const DluMapper mapper(settings.font());
+        REQUIRE(settings.objectName() == QStringLiteral("IDD_SETTINGSPAGE"));
+        REQUIRE(settings.layout() == nullptr);
+        REQUIRE(settings.size() == QSize(
+            mapper.x(resource.width), mapper.y(resource.height)));
+        for (const QString& identifier : {
+                 QStringLiteral("IDC_GROUP0"),
+                 QStringLiteral("IDC_COMICSDATA"),
+                 QStringLiteral("IDC_ADVANCED_RATINGS_GROUPBOX"),
+                 QStringLiteral("IDC_RATINGS_ICON"),
+                 QStringLiteral("IDC_RATINGS_TEXT"),
+                 QStringLiteral("IDC_RATINGS_TURN_ON"),
+                 QStringLiteral("IDC_ADVANCED_RATINGS_BUTTON"),
+                 QStringLiteral("IDC_ACCEPTWHISPERS"),
+                 QStringLiteral("IDC_PLAYSOUNDS"),
+                 QStringLiteral("IDC_SHOWARRIVALS"),
+                 QStringLiteral("IDC_SHOWIDENTITY"),
+                 QStringLiteral("IDC_INVISIBLE"),
+                 QStringLiteral("IDC_ALLOWINVITES"),
+                 QStringLiteral("IDC_ALLOW_FILETX"),
+                 QStringLiteral("IDC_NETMEETING_AUTOSTART"),
+                 QStringLiteral("IDC_SAVE"),
+                 QStringLiteral("IDC_SOUNDPATH"),
+                 QStringLiteral("IDC_SOUNDPATH_BROWSE")}) {
+            QWidget* control = settings.findChild<QWidget*>(identifier);
+            const OriginalDialogControl* source = resourceControl(
+                resource, identifier);
+            REQUIRE(control && source);
+            REQUIRE(control->geometry() == resourceRect(
+                *source, settings.font()));
+        }
+        REQUIRE(!settings.findChild<QWidget*>(
+                    QStringLiteral("IDC_ADVANCED_RATINGS_GROUPBOX"))
+                    ->isEnabled());
+        REQUIRE(!settings.findChild<QWidget*>(
+                    QStringLiteral("IDC_RATINGS_TURN_ON"))->isEnabled());
+        REQUIRE(!settings.findChild<QWidget*>(
+                    QStringLiteral("IDC_SOUNDPATH_BROWSE"))->isEnabled());
+
+        settings.findChild<QCheckBox*>(
+            QStringLiteral("IDC_COMICSDATA"))->setChecked(
+                sendComicsDataBefore);
+        settings.findChild<QCheckBox*>(
+            QStringLiteral("IDC_ACCEPTWHISPERS"))->setChecked(
+                !whispersBefore);
+        settings.findChild<QCheckBox*>(
+            QStringLiteral("IDC_PLAYSOUNDS"))->setChecked(!soundsBefore);
+        settings.findChild<QCheckBox*>(
+            QStringLiteral("IDC_SHOWARRIVALS"))->setChecked(!arrivalsBefore);
+        settings.findChild<QCheckBox*>(
+            QStringLiteral("IDC_SHOWIDENTITY"))->setChecked(!identityBefore);
+        settings.findChild<QCheckBox*>(
+            QStringLiteral("IDC_ALLOWINVITES"))->setChecked(!invitesBefore);
+        settings.findChild<QCheckBox*>(
+            QStringLiteral("IDC_ALLOW_FILETX"))->setChecked(!fileTxBefore);
+        settings.findChild<QCheckBox*>(
+            QStringLiteral("IDC_NETMEETING_AUTOSTART"))->setChecked(!nmBefore);
+        settings.findChild<QCheckBox*>(
+            QStringLiteral("IDC_SAVE"))->setChecked(!promptBefore);
+        settings.findChild<QLineEdit*>(
+            QStringLiteral("IDC_SOUNDPATH"))->setText(
+                QStringLiteral("first;;FIRST;second"));
+        REQUIRE(settings.validate());
+        settings.apply();
+        REQUIRE(GetSendComicsData() == !sendComicsDataBefore);
+        REQUIRE(theApp.m_bPrompt == !promptBefore);
+        REQUIRE(theApp.m_bAcceptWhispers == !whispersBefore);
+        REQUIRE(theApp.m_bPlaySounds == !soundsBefore);
+        REQUIRE(theApp.m_bShowArrivals == !arrivalsBefore);
+        REQUIRE(theApp.m_bShowIdentity == !identityBefore);
+        REQUIRE(theApp.m_bAllowInvites == !invitesBefore);
+        REQUIRE(theApp.m_bAllowFileTX == !fileTxBefore);
+        REQUIRE(theApp.m_bAcceptNMCalls == !nmBefore);
+        REQUIRE(theApp.m_soundPath == QStringLiteral("first;;second"));
+
+        SetSendComicsData(sendComicsDataBefore);
+        theApp.m_bPrompt = promptBefore;
+        theApp.m_bAcceptWhispers = whispersBefore;
+        theApp.m_bPlaySounds = soundsBefore;
+        theApp.m_bShowArrivals = arrivalsBefore;
+        theApp.m_bShowIdentity = identityBefore;
+        theApp.m_bAllowInvites = invitesBefore;
+        theApp.m_bAllowFileTX = fileTxBefore;
+        theApp.m_bAcceptNMCalls = nmBefore;
+        theApp.m_soundPath = soundPathBefore;
+    }
+
+    {
+        const QString profileBefore = theApp.m_myProfile;
+        const QString realNameBefore = theApp.m_myRealName;
+        const QString emailBefore = theApp.m_strEmail;
+        const QString homePageBefore = theApp.m_strHomePage;
+        const QString plain = originalResourceString(
+            QStringLiteral("IDS_DFLTAWAYMSG"));
+        REQUIRE(plain.size() > 3);
+        CDWordArray formatting;
+        formatting.Add(MAKELONG(wBold, 0));
+        formatting.Add(MAKELONG(0, 3));
+        const QByteArray plainBytes = plain.toUtf8();
+        char* sourceControlFull = SzControlFull(
+            plainBytes.constData(), &formatting);
+        REQUIRE(sourceControlFull != nullptr);
+        theApp.m_myProfile = QString::fromUtf8(sourceControlFull);
+        delete[] sourceControlFull;
+
+        CPersonalPage personal;
+        personal.show();
+        application.processEvents();
+        const OriginalDialogResource resource = originalDialogResource(
+            QStringLiteral("IDD_PERSONALPAGE_IRC"));
+        const DluMapper mapper(personal.font());
+        REQUIRE(personal.objectName()
+                == QStringLiteral("IDD_PERSONALPAGE_IRC"));
+        REQUIRE(personal.layout() == nullptr);
+        REQUIRE(personal.size() == QSize(
+            mapper.x(resource.width), mapper.y(resource.height)));
+        for (const QString& identifier : {
+                 QStringLiteral("IDC_REALNAME"),
+                 QStringLiteral("IDC_NICKNAME"),
+                 QStringLiteral("IDC_EMAIL"),
+                 QStringLiteral("IDC_HOMEPAGE"),
+                 QStringLiteral("IDC_PROFILE_RICHEDIT"),
+                 QStringLiteral("IDC_ACCEPTWHISPERS"),
+                 QStringLiteral("IDC_SHOWARRIVALS"),
+                 QStringLiteral("IDC_SAVE")}) {
+            QWidget* control = personal.findChild<QWidget*>(identifier);
+            const OriginalDialogControl* source = resourceControl(
+                resource, identifier);
+            REQUIRE(control && source);
+            REQUIRE(control->geometry() == resourceRect(
+                *source, personal.font()));
+            REQUIRE(control->isVisible() == source->visible);
+        }
+        auto* profile = dynamic_cast<CRtfCtrl*>(
+            personal.findChild<QWidget*>(
+                QStringLiteral("IDC_PROFILE_RICHEDIT")));
+        auto* email = personal.findChild<QLineEdit*>(
+            QStringLiteral("IDC_EMAIL"));
+        auto* homePage = personal.findChild<QLineEdit*>(
+            QStringLiteral("IDC_HOMEPAGE"));
+        REQUIRE(profile && profile->toPlainText() == plain);
+        REQUIRE(email && email->validator());
+        REQUIRE(homePage && homePage->validator());
+        QString filteredWhitespace = QStringLiteral("\t");
+        int filteredPosition = 0;
+        REQUIRE(email->validator()->validate(
+                    filteredWhitespace, filteredPosition)
+                == QValidator::Invalid);
+        filteredPosition = 0;
+        REQUIRE(homePage->validator()->validate(
+                    filteredWhitespace, filteredPosition)
+                == QValidator::Invalid);
+        REQUIRE(GetPersonalPage() == &personal);
+        REQUIRE(personal.validate());
+        personal.apply();
+
+        QByteArray stored = theApp.m_myProfile.toUtf8();
+        CDWordArray storedFormatting;
+        char* storedPlain = SzControlLess(
+            stored.data(), &storedFormatting);
+        REQUIRE(QString::fromUtf8(storedPlain) == plain);
+        REQUIRE(storedFormatting.GetSize() >= 2);
+        REQUIRE(LOWORD(storedFormatting.GetAt(0)) & wBold);
+        personal.hide();
+        application.processEvents();
+        REQUIRE(GetPersonalPage() == nullptr);
+
+        theApp.m_myProfile.clear();
+        CPersonalPage defaultProfile;
+        REQUIRE(defaultProfile.m_rtfProfile.toPlainText()
+                == originalResourceString(
+                    QStringLiteral("ID_DEFAULT_PROFILE")));
+
+        theApp.m_myProfile = profileBefore;
+        theApp.m_myRealName = realNameBefore;
+        theApp.m_strEmail = emailBefore;
+        theApp.m_strHomePage = homePageBefore;
+    }
+
+    {
+        COptionsDialog textOptions(FALSE, IDD_SETTINGSPAGE);
+        auto* textTabs = textOptions.findChild<QTabWidget*>(
+            QStringLiteral("OptionsTabs"));
+        REQUIRE(textTabs && textTabs->count() == 4);
+        REQUIRE(textTabs->tabText(0) == originalDialogCaption(
+            QStringLiteral("IDD_PERSONALPAGE_IRC")));
+        REQUIRE(textTabs->tabText(1) == originalDialogCaption(
+            QStringLiteral("IDD_SETTINGSPAGE")));
+        REQUIRE(textTabs->tabText(2) == originalDialogCaption(
+            QStringLiteral("IDD_TEXTFONTPAGE_IRC")));
+        REQUIRE(textTabs->tabText(3) == originalDialogCaption(
+            QStringLiteral("IDD_SERVERSPAGE")));
+        REQUIRE(dynamic_cast<CSettingsPage*>(
+                    textTabs->currentWidget()) != nullptr);
+
+        auto* inactiveCharacter = textOptions.findChild<QWidget*>(
+            QStringLiteral("IDD_CHARACTERPAGE"));
+        auto* inactiveBackground = textOptions.findChild<QWidget*>(
+            QStringLiteral("IDD_BACKGROUNDPAGE"));
+        REQUIRE(inactiveCharacter && inactiveBackground);
+        auto* inactiveAvatarList = inactiveCharacter->findChild<QListWidget*>(
+            QStringLiteral("IDC_AVLIST"));
+        auto* inactiveBackgroundList =
+            inactiveBackground->findChild<QListWidget*>(
+                QStringLiteral("IDC_BACKLIST"));
+        CBodyCam* inactiveBodyCam = nullptr;
+        for (QWidget* child :
+             inactiveCharacter->findChildren<QWidget*>()) {
+            if ((inactiveBodyCam = dynamic_cast<CBodyCam*>(child))) break;
+        }
+        auto* inactiveBackgroundPreview =
+            inactiveBackground->findChild<QLabel*>(
+                QStringLiteral("BACKGROUND_PREVIEW"));
+        REQUIRE(inactiveAvatarList && inactiveBackgroundList
+                && inactiveBodyCam && inactiveBackgroundPreview);
+        REQUIRE(inactiveAvatarList->count() == 0);
+        REQUIRE(inactiveBackgroundList->count() == 0);
+        REQUIRE(inactiveBodyCam->m_avatar == nullptr);
+        REQUIRE(inactiveBackgroundPreview->pixmap().isNull());
+        textOptions.show();
+        application.processEvents();
+        REQUIRE(inactiveAvatarList->count() == 0);
+        REQUIRE(inactiveBackgroundList->count() == 0);
+        REQUIRE(inactiveBodyCam->m_avatar == nullptr);
+        REQUIRE(inactiveBackgroundPreview->pixmap().isNull());
+
+        const QString cancelledRealName = theApp.m_myRealName;
+        const bool cancelledWhispers = theApp.m_bAcceptWhispers;
+        auto* cancelledPersonal = dynamic_cast<CPersonalPage*>(
+            textTabs->widget(0));
+        auto* cancelledSettings = dynamic_cast<CSettingsPage*>(
+            textTabs->widget(1));
+        REQUIRE(cancelledPersonal && cancelledSettings);
+        cancelledPersonal->findChild<QLineEdit*>(
+            QStringLiteral("IDC_REALNAME"))->setText(
+                QStringLiteral("must not be applied"));
+        cancelledSettings->findChild<QCheckBox*>(
+            QStringLiteral("IDC_ACCEPTWHISPERS"))->setChecked(
+                !cancelledWhispers);
+        auto* textButtons = textOptions.findChild<QDialogButtonBox*>();
+        REQUIRE(textButtons);
+        textButtons->button(QDialogButtonBox::Cancel)->click();
+        REQUIRE(textOptions.result() == QDialog::Rejected);
+        REQUIRE(theApp.m_myRealName == cancelledRealName);
+        REQUIRE(theApp.m_bAcceptWhispers == cancelledWhispers);
+
+        COptionsDialog comicsOptions(TRUE, IDD_BACKGROUNDPAGE);
+        auto* comicsTabs = comicsOptions.findChild<QTabWidget*>(
+            QStringLiteral("OptionsTabs"));
+        REQUIRE(comicsTabs && comicsTabs->count() == 6);
+        REQUIRE(comicsTabs->tabText(0) == originalDialogCaption(
+            QStringLiteral("IDD_PERSONALPAGE_IRC")));
+        REQUIRE(comicsTabs->tabText(1) == originalDialogCaption(
+            QStringLiteral("IDD_SETTINGSPAGE")));
+        REQUIRE(comicsTabs->tabText(2) == originalDialogCaption(
+            QStringLiteral("IDD_COMICS_VIEW")));
+        REQUIRE(comicsTabs->tabText(3) == originalDialogCaption(
+            QStringLiteral("IDD_CHARACTERPAGE")));
+        REQUIRE(comicsTabs->tabText(4) == originalDialogCaption(
+            QStringLiteral("IDD_BACKGROUNDPAGE")));
+        REQUIRE(comicsTabs->tabText(5) == originalDialogCaption(
+            QStringLiteral("IDD_SERVERSPAGE")));
+        REQUIRE(dynamic_cast<CBackgroundPage*>(
+                    comicsTabs->currentWidget()) != nullptr);
+
+        auto* character = dynamic_cast<CCharacterPage*>(
+            comicsTabs->widget(3));
+        REQUIRE(character && character->layout() == nullptr);
+        const OriginalDialogResource characterResource =
+            originalDialogResource(QStringLiteral("IDD_CHARACTERPAGE"));
+        const DluMapper characterMapper(character->font());
+        REQUIRE(character->size() == QSize(
+            characterMapper.x(characterResource.width),
+            characterMapper.y(characterResource.height)));
+        for (const QString& identifier : {
+                 QStringLiteral("IDC_AVLIST"),
+                 QStringLiteral("IDC_CHARACTER_PREVIEW"),
+                 QStringLiteral("IDC_AVATAR_COPYRIGHT")}) {
+            QWidget* control = character->findChild<QWidget*>(identifier);
+            const OriginalDialogControl* source = resourceControl(
+                characterResource, identifier);
+            REQUIRE(control && source);
+            REQUIRE(control->geometry() == resourceRect(
+                *source, character->font()));
+        }
+        QWidget* bodyCam = character->findChild<QWidget*>(
+            QStringLiteral("5"));
+        QWidget* characterPreview = character->findChild<QWidget*>(
+            QStringLiteral("IDC_CHARACTER_PREVIEW"));
+        REQUIRE(bodyCam && characterPreview);
+        REQUIRE(bodyCam->geometry() == characterPreview->geometry());
+        REQUIRE(!characterPreview->isVisible());
+
+        auto* background = dynamic_cast<CBackgroundPage*>(
+            comicsTabs->widget(4));
+        REQUIRE(background && background->layout() == nullptr);
+        const OriginalDialogResource backgroundResource =
+            originalDialogResource(QStringLiteral("IDD_BACKGROUNDPAGE"));
+        const DluMapper backgroundMapper(background->font());
+        REQUIRE(background->size() == QSize(
+            backgroundMapper.x(backgroundResource.width),
+            backgroundMapper.y(backgroundResource.height)));
+        for (const QString& identifier : {
+                 QStringLiteral("IDC_BACKLIST"),
+                 QStringLiteral("IDC_BACKPREV"),
+                 QStringLiteral("IDC_PREVX"),
+                 QStringLiteral("IDC_PREVY"),
+                 QStringLiteral("IDC_BACKGROUND_COPYRIGHT")}) {
+            QWidget* control = background->findChild<QWidget*>(identifier);
+            const OriginalDialogControl* source = resourceControl(
+                backgroundResource, identifier);
+            REQUIRE(control && source);
+            REQUIRE(control->geometry() == resourceRect(
+                *source, background->font()));
+        }
+        QWidget* backdropPreview = background->findChild<QWidget*>(
+            QStringLiteral("BACKGROUND_PREVIEW"));
+        const OriginalDialogControl* previewStart = resourceControl(
+            backgroundResource, QStringLiteral("IDC_BACKPREV"));
+        const OriginalDialogControl* previewRight = resourceControl(
+            backgroundResource, QStringLiteral("IDC_PREVX"));
+        const OriginalDialogControl* previewBottom = resourceControl(
+            backgroundResource, QStringLiteral("IDC_PREVY"));
+        REQUIRE(backdropPreview && previewStart
+                && previewRight && previewBottom);
+        REQUIRE(backdropPreview->geometry() == QRect(
+            backgroundMapper.x(previewStart->x),
+            backgroundMapper.y(previewStart->y),
+            backgroundMapper.x(previewRight->x + previewRight->width)
+                - backgroundMapper.x(previewStart->x),
+            backgroundMapper.y(previewBottom->y + previewBottom->height)
+                - backgroundMapper.y(previewStart->y)));
+
+        const QFont savedComicFont = theApp.m_comicsFont;
+        const COLORREF savedComicColor = theApp.m_comicsColor;
+        QFont changedComicFont = savedComicFont;
+        changedComicFont.setPixelSize(
+            savedComicFont.pixelSize() == 17 * 20 ? 8 * 20 : 17 * 20);
+        changedComicFont.setUnderline(!savedComicFont.underline());
+        const COLORREF changedComicColor =
+            differentSourceColor(savedComicColor);
+        theApp.m_comicsColor = changedComicColor;
+        CUnitPanelPage::SetFonts(changedComicFont, changedComicColor);
+
+        auto* comicPage = dynamic_cast<CComicsPropPage*>(
+            comicsTabs->widget(2));
+        auto* resetComicFont = comicPage
+            ? comicPage->findChild<QPushButton*>(
+                  QStringLiteral("ID_RESET_TEXTFONTS"))
+            : nullptr;
+        auto* comicButtons =
+            comicsOptions.findChild<QDialogButtonBox*>();
+        REQUIRE(comicPage && resetComicFont && comicButtons);
+        resetComicFont->click();
+        const QFont resetFont = theApp.m_comicsFont;
+        const COLORREF resetColor = theApp.m_comicsColor;
+        REQUIRE(resetFont.family() == originalResourceString(
+            QStringLiteral("ID_COMIC_FONT_NAME")));
+        REQUIRE(resetFont.pixelSize()
+                == originalResourceString(
+                    QStringLiteral("IDS_DFLT_COMICSPNTSIZE")).toInt() * 20);
+        REQUIRE(resetColor == RGB(0, 0, 0));
+        REQUIRE(resetFont != changedComicFont
+                || resetColor != changedComicColor);
+
+        comicButtons->button(QDialogButtonBox::Cancel)->click();
+        REQUIRE(comicsOptions.result() == QDialog::Rejected);
+        REQUIRE(theApp.m_comicsFont == resetFont);
+        REQUIRE(theApp.m_comicsColor == resetColor);
+
+        theApp.m_comicsColor = savedComicColor;
+        CUnitPanelPage::SetFonts(savedComicFont, savedComicColor);
+    }
+
+    {
+        const QString savedBackdrop = theApp.m_lastBackDrop;
+        const QStringList backdropNames = OriginalBackdropNames();
+        REQUIRE(!backdropNames.isEmpty());
+        QString missingCurrent = originalResourceString(
+            QStringLiteral("IDS_OPTIONS"));
+        const auto matchesBackdrop = [&backdropNames](
+                                         const QString& candidate) {
+            for (const QString& fileName : backdropNames) {
+                if (fileName.compare(candidate, Qt::CaseInsensitive) == 0
+                    || QFileInfo(fileName).completeBaseName().compare(
+                           candidate, Qt::CaseInsensitive) == 0) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        while (matchesBackdrop(missingCurrent))
+            missingCurrent.append(QLatin1Char('!'));
+        theApp.m_lastBackDrop = missingCurrent;
+
+        CBackgroundPage background;
+        auto* list = background.findChild<QListWidget*>(
+            QStringLiteral("IDC_BACKLIST"));
+        auto* preview = background.findChild<QLabel*>(
+            QStringLiteral("BACKGROUND_PREVIEW"));
+        REQUIRE(list && preview);
+        REQUIRE(list->count() == 0);
+        REQUIRE(preview->pixmap().isNull());
+
+        background.show();
+        application.processEvents();
+        REQUIRE(list->count() == backdropNames.size());
+        REQUIRE(list->currentItem() == nullptr);
+        REQUIRE(preview->pixmap().isNull());
+        REQUIRE(theApp.m_lastBackDrop == missingCurrent);
+        background.hide();
+        application.processEvents();
+        REQUIRE(list->count() == 0);
+        background.show();
+        application.processEvents();
+        REQUIRE(list->count() == backdropNames.size());
+        REQUIRE(list->currentItem() == nullptr);
+        REQUIRE(preview->pixmap().isNull());
+        background.hide();
+        theApp.m_lastBackDrop = savedBackdrop;
+    }
 
     {
         const QFont before = theApp.m_comicsFont;
@@ -461,6 +905,60 @@ int main(int argc, char** argv)
         REQUIRE(theApp.m_cfArray[2].dwMask & CFM_COLOR);
         REQUIRE(theApp.m_cfArray[2].crTextColor == acceptedColor);
         REQUIRE(theApp.m_textColor == acceptedColor);
+    }
+
+    {
+        const QFont originalFont = theApp.m_comicsFont;
+        const COLORREF originalColor = theApp.m_comicsColor;
+        const COLORREF cancelledColor = differentSourceColor(originalColor, 5);
+        QTimer::singleShot(0, [cancelledColor] {
+            auto* dialog = qobject_cast<QFontDialog*>(
+                QApplication::activeModalWidget());
+            REQUIRE(dialog != nullptr);
+            auto* color = dialog->findChild<QComboBox*>(
+                QStringLiteral("1139"));
+            REQUIRE(color != nullptr);
+            REQUIRE(colorIndex(color, theApp.m_comicsColor) >= 0);
+            color->setCurrentIndex(colorIndex(color, cancelledColor));
+            QFont changed = dialog->currentFont();
+            changed.setPointSize(17);
+            dialog->setCurrentFont(changed);
+            dialog->reject();
+        });
+        SetComicsFont();
+        REQUIRE(theApp.m_comicsColor == originalColor);
+        REQUIRE(theApp.m_comicsFont == originalFont);
+
+        const COLORREF acceptedColor = differentSourceColor(originalColor, 9);
+        QTimer::singleShot(0, [acceptedColor] {
+            auto* dialog = qobject_cast<QFontDialog*>(
+                QApplication::activeModalWidget());
+            REQUIRE(dialog != nullptr);
+            auto* color = dialog->findChild<QComboBox*>(
+                QStringLiteral("1139"));
+            REQUIRE(color != nullptr);
+            color->setCurrentIndex(colorIndex(color, acceptedColor));
+            REQUIRE(color->currentIndex() >= 0);
+
+            QFont invalid = dialog->currentFont();
+            invalid.setPointSize(19);
+            dialog->setCurrentFont(invalid);
+            dialog->accept();
+            REQUIRE(dialog->isVisible());
+
+            QFont selected = dialog->currentFont();
+            selected.setPointSize(13);
+            selected.setUnderline(true);
+            dialog->setCurrentFont(selected);
+            dialog->accept();
+        });
+        SetComicsFont();
+        REQUIRE(theApp.m_comicsColor == acceptedColor);
+        REQUIRE(theApp.m_comicsFont.pixelSize() == 13 * 20);
+        REQUIRE(theApp.m_comicsFont.underline());
+
+        theApp.m_comicsColor = originalColor;
+        CUnitPanelPage::SetFonts(originalFont, originalColor);
     }
 
     {

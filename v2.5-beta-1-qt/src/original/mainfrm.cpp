@@ -12,14 +12,17 @@
 #include "protsupp.h"
 #include "saywnd.h"
 #include "setupdlg.h"
+#include "status.h"
 #include "tabbar.h"
 #include "utils.h"
 #include "originalassets.h"
 #include "userinfo.h"
 
 #include <QAction>
+#include <QActionGroup>
 #include <QApplication>
 #include <QClipboard>
+#include <QEvent>
 #include <QFrame>
 #include <QKeySequence>
 #include <QLabel>
@@ -27,10 +30,12 @@
 #include <QMenuBar>
 #include <QMdiArea>
 #include <QMdiSubWindow>
-#include <QMimeData>
+#include <QResizeEvent>
+#include <QSet>
 #include <QShortcut>
 #include <QStatusBar>
-#include <QTextEdit>
+#include <QStyle>
+#include <QTimer>
 #include <QtPrintSupport/QPrinter>
 
 #include <algorithm>
@@ -39,7 +44,13 @@
 namespace {
 QString commandStatusText(const QString& commandIdentifier)
 {
-    return originalResourceString(commandIdentifier).section(QLatin1Char('\n'), 0, 0);
+    QString resourceIdentifier = commandIdentifier;
+    if (commandIdentifier.startsWith(QLatin1String("ID_MACRO_A"))
+        && commandIdentifier != QLatin1String("ID_MACRO_A0")) {
+        resourceIdentifier = QStringLiteral("ID_MACRO_A0");
+    }
+    return originalResourceString(resourceIdentifier).section(
+        QLatin1Char('\n'), 0, 0);
 }
 
 QString commandToolTip(const QString& commandIdentifier)
@@ -57,7 +68,6 @@ bool isCheckCommand(const QString& commandIdentifier)
         QStringLiteral("ID_VIEW_STATUS_BAR"),
         QStringLiteral("ID_VIEW_STATUSWINDOW"),
         QStringLiteral("ID_VIEW_LOGINNOTIFS"),
-        QStringLiteral("ID_MOTD"),
         QStringLiteral("ID_WINDOW_TILE_AUTO"),
         QStringLiteral("ID_VIEW_COMICS"),
         QStringLiteral("ID_VIEW_TEXT"),
@@ -103,48 +113,57 @@ QKeySequence acceleratorSequence(const OriginalAccelerator& accelerator)
     return key ? QKeySequence(QKeyCombination(modifiers, Qt::Key(key))) : QKeySequence();
 }
 
-void setActionsEnabled(const QHash<QString, QList<QAction*>>& actions,
+void setActionsEnabled(
+    const QHash<QString, QList<QPointer<QAction>>>& actions,
                        const QString& commandIdentifier, bool enabled)
 {
-    for (QAction* action : actions.value(commandIdentifier)) action->setEnabled(enabled);
+    for (const QPointer<QAction>& action :
+         actions.value(commandIdentifier)) {
+        if (action) action->setEnabled(enabled);
+    }
 }
 
-void setActionsChecked(const QHash<QString, QList<QAction*>>& actions,
+void setActionsChecked(
+    const QHash<QString, QList<QPointer<QAction>>>& actions,
                        const QString& commandIdentifier, bool checked)
 {
-    for (QAction* action : actions.value(commandIdentifier)) {
+    for (const QPointer<QAction>& action :
+         actions.value(commandIdentifier)) {
+        if (!action) continue;
         action->setCheckable(true);
         action->setChecked(checked);
     }
 }
 
-bool hasComicSelection(CChatDoc* document)
+bool isMenuFocusWidget(QWidget* widget)
 {
-    if (!document) return false;
-    int index = -1;
-    while (CUserInfo* pui = document->GetNextSelectedMember(index)) {
-        if (pui->IsComicUser()) return true;
+    for (QWidget* current = widget; current;
+         current = current->parentWidget()) {
+        if (qobject_cast<QMenu*>(current)
+            || qobject_cast<QMenuBar*>(current)) {
+            return true;
+        }
     }
     return false;
 }
 
-bool ignoreSelectionState(CChatDoc* document, bool* allIgnored)
+QString quoteMenuAmpersands(QString text)
 {
-    bool enabled = false;
-    bool ignored = true;
-    if (document) {
-        int index = -1;
-        while (CUserInfo* pui = document->GetNextSelectedMember(index)) {
-            if (pui->IsSelf()) continue;
-            enabled = true;
-            if (!pui->Ignored()) {
-                ignored = false;
-                break;
-            }
-        }
+    text.replace(QLatin1Char('&'), QStringLiteral("&&"));
+    return text;
+}
+
+void makeExclusiveMenuGroup(QMenu* menu,
+                            const QStringList& commandIdentifiers)
+{
+    if (!menu) return;
+    auto* group = new QActionGroup(menu);
+    group->setExclusive(true);
+    for (QAction* action : menu->actions()) {
+        if (commandIdentifiers.contains(action->data().toString()))
+            group->addAction(action);
     }
-    if (allIgnored) *allIgnored = enabled && ignored;
-    return enabled;
+    if (group->actions().size() < 2) delete group;
 }
 }
 
@@ -166,6 +185,20 @@ CMainFrame::CMainFrame(CChatDoc* doc, bool ownsDocument, QWidget* parent)
     }
     m_mdiArea->setViewMode(QMdiArea::SubWindowView);
     setCentralWidget(m_mdiArea);
+    qApp->installEventFilter(this);
+    connect(qApp, &QApplication::focusChanged, this,
+            [this](QWidget* old, QWidget* now) {
+                if (now && !isMenuFocusWidget(now))
+                    m_commandFocusWidget = now;
+                else if (!m_commandFocusWidget && old
+                         && !isMenuFocusWidget(old))
+                    m_commandFocusWidget = old;
+                scheduleCommandUiUpdate();
+            });
+    if (QClipboard* clipboard = QApplication::clipboard()) {
+        connect(clipboard, &QClipboard::dataChanged, this,
+                &CMainFrame::scheduleCommandUiUpdate);
+    }
     connect(m_mdiArea, &QMdiArea::subWindowActivated, this,
             [this](QMdiSubWindow* window) {
                 OnMDIActivate(dynamic_cast<CChildFrame*>(window));
@@ -185,6 +218,7 @@ CMainFrame::CMainFrame(CChatDoc* doc, bool ownsDocument, QWidget* parent)
 CMainFrame::~CMainFrame()
 {
     m_destroying = true;
+    qApp->removeEventFilter(this);
     if (m_wndToolBar)
         m_wndToolBar->SaveStateToBuffer(&theApp.m_pbCoolBarState);
     const QList<CChildFrame*> frames = m_childFrames.values();
@@ -245,13 +279,12 @@ CChildFrame* CMainFrame::AddDocument(CChatDoc* document, bool ownsDocument,
     const bool visible = !document->m_bStatusView
         || (theApp.m_flags0 & F0_SHOWSTATUSWINDOW);
     if (visible) {
-        if (theApp.m_flags1 & F1_MAXMDI) frame->showMaximized();
-        else frame->show();
-        if (activate) frame->ActivateFrame();
+        frame->ActivateFrame(activate);
     } else {
         frame->hide();
     }
     AutoArrangeWindows();
+    UpdateVisibilityInfo();
     return frame;
 }
 
@@ -290,23 +323,42 @@ void CMainFrame::CloseDocument(CChatDoc* document)
 void CMainFrame::OnMDIActivate(CChildFrame* frame)
 {
     if (!frame) {
+        setWindowTitle(originalResourceString(
+            QStringLiteral("AFX_IDS_APP_TITLE")));
         m_doc = nullptr;
         m_chatView = nullptr;
         SetChatDoc(nullptr);
+        UpdateAdminMenu(nullptr);
         SetStatusPaneString(1, QString());
+        if (CRoomInfo* protocol = GetDefaultProto())
+            protocol->UpdateStatus();
         updateCommandUi();
+        UpdateVisibilityInfo();
         return;
     }
     m_doc = frame->GetDocument();
     m_chatView = frame->GetChatView();
-    SetChatDoc(m_doc);
     if (m_doc) {
+        setWindowTitle(
+            originalResourceString(QStringLiteral("AFX_IDS_APP_TITLE"))
+            + QStringLiteral(" - [") + m_doc->GetTitle()
+            + QLatin1Char(']'));
+    }
+    SetChatDoc(m_doc);
+    SetStatusPaneString(1, QString());
+    if (m_doc) {
+        m_doc->LoadDocData();
+        m_doc->UpdateAdminMenu();
+        m_doc->UpdateComicCharacterMenu();
         m_doc->ResetStatus(true, true);
+        if (currentRoom) currentRoom->UpdateStatus();
         const int tab = m_wndTabBar->FindTabNum(m_doc);
         if (tab >= 0 && m_wndTabBar->TabControl()->currentIndex() != tab)
             m_wndTabBar->TabControl()->setCurrentIndex(tab);
+        m_doc->SetFocusToSayWnd();
     }
     updateCommandUi();
+    UpdateVisibilityInfo();
 }
 
 void CMainFrame::UpdateDocumentTitle(CChatDoc* document,
@@ -315,6 +367,12 @@ void CMainFrame::UpdateDocumentTitle(CChatDoc* document,
     if (!document) return;
     if (CChildFrame* frame = m_childFrames.value(document))
         frame->SetDocumentTitle(title);
+    if (document == m_doc) {
+        setWindowTitle(
+            originalResourceString(QStringLiteral("AFX_IDS_APP_TITLE"))
+            + QStringLiteral(" - [") + title + QLatin1Char(']'));
+    }
+    if (g_bFreezeTabs) return;
     const int tab = m_wndTabBar->FindTabNum(document);
     if (tab >= 0) m_wndTabBar->DelMDITab(tab);
     if (!document->m_bStatusView
@@ -323,7 +381,7 @@ void CMainFrame::UpdateDocumentTitle(CChatDoc* document,
     }
 }
 
-void CMainFrame::ShowStatusWindow(bool show)
+void CMainFrame::ShowStatusWindow(bool show, bool activate)
 {
     if (!m_statusDoc) return;
     CChildFrame* frame = m_childFrames.value(m_statusDoc);
@@ -331,22 +389,41 @@ void CMainFrame::ShowStatusWindow(bool show)
     if (show) {
         theApp.m_flags0 |= F0_SHOWSTATUSWINDOW;
         if (m_wndTabBar->FindTabNum(m_statusDoc) < 0)
-            m_wndTabBar->AddMDITab(m_statusDoc->GetTitle(), m_statusDoc, true);
-        frame->ActivateFrame();
+            m_wndTabBar->AddMDITab(
+                m_statusDoc->GetTitle(), m_statusDoc, activate);
+        frame->ActivateFrame(activate);
     } else {
+        const bool statusWasActive =
+            m_mdiArea->activeSubWindow() == frame;
         theApp.m_flags0 &= ~DWORD(F0_SHOWSTATUSWINDOW);
-        const int tab = m_wndTabBar->FindTabNum(m_statusDoc);
-        if (tab >= 0) m_wndTabBar->DelMDITab(tab);
-        frame->hide();
-        for (QMdiSubWindow* candidate : m_mdiArea->subWindowList(
-                 QMdiArea::ActivationHistoryOrder)) {
-            if (candidate != frame && !candidate->isHidden()) {
-                m_mdiArea->setActiveSubWindow(candidate);
-                break;
+        if (statusWasActive) {
+            const QList<QMdiSubWindow*> history =
+                m_mdiArea->subWindowList(
+                    QMdiArea::ActivationHistoryOrder);
+            bool activatedSuccessor = false;
+            for (auto iterator = history.crbegin();
+                 iterator != history.crend(); ++iterator) {
+                QMdiSubWindow* candidate = *iterator;
+                if (candidate != frame && !candidate->isHidden()) {
+                    m_mdiArea->setActiveSubWindow(candidate);
+                    activatedSuccessor = true;
+                    break;
+                }
+            }
+            if (!activatedSuccessor) {
+                // MDI has no MDINext target. Hide first, then explicitly
+                // clear Qt's active pointer; a future child clears any
+                // addSubWindow WindowActive artifact before it is revealed.
+                frame->hide();
+                m_mdiArea->setActiveSubWindow(nullptr);
             }
         }
+        const int tab = m_wndTabBar->FindTabNum(m_statusDoc);
+        if (tab >= 0) m_wndTabBar->DelMDITab(tab);
+        if (!frame->isHidden()) frame->hide();
     }
     AutoArrangeWindows();
+    UpdateVisibilityInfo();
     updateCommandUi();
 }
 
@@ -378,20 +455,18 @@ void CMainFrame::TileWindows(bool vertical)
 void CMainFrame::AutoArrangeWindows()
 {
     if (!(theApp.m_flags0 & F0_AUTOARRANGEWNDS) || !m_mdiArea) return;
-    TileWindows((theApp.m_flags0 & F0_AUTOARRANGEISVERT) != 0);
+    const bool vertical =
+        (theApp.m_flags0 & F0_AUTOARRANGEISVERT) != 0;
+    QTimer::singleShot(0, this, [this, vertical] {
+        if (!m_destroying && m_mdiArea) TileWindows(vertical);
+    });
 }
 
 QAction* CMainFrame::addCommand(QMenu* menu, const QString& text,
                                 const QString& commandIdentifier)
 {
     QAction* action = menu->addAction(text);
-    action->setData(commandIdentifier);
-    action->setStatusTip(commandStatusText(commandIdentifier));
-    action->setCheckable(isCheckCommand(commandIdentifier));
-    connect(action, &QAction::triggered, this, [this, commandIdentifier] {
-        executeCommand(commandIdentifier);
-    });
-    m_commandActions[commandIdentifier].append(action);
+    configureCommandAction(action, commandIdentifier);
     return action;
 }
 
@@ -400,15 +475,128 @@ QAction* CMainFrame::addToolCommand(CCoolToolBarEx* bar,
                                     const QIcon& icon)
 {
     QAction* action = bar->addAction(icon, commandToolTip(commandIdentifier));
-    action->setData(commandIdentifier);
     action->setToolTip(commandToolTip(commandIdentifier));
+    configureCommandAction(action, commandIdentifier);
+    return action;
+}
+
+void CMainFrame::configureCommandAction(
+    QAction* action, const QString& commandIdentifier)
+{
+    if (!action) return;
+    action->setData(commandIdentifier);
     action->setStatusTip(commandStatusText(commandIdentifier));
     action->setCheckable(isCheckCommand(commandIdentifier));
+    QString classification;
+    switch (commandClass(commandIdentifier)) {
+    case CommandClass::Active:
+        classification = QStringLiteral("active");
+        break;
+    case CommandClass::Deferred:
+        classification = QStringLiteral("deferred");
+        break;
+    case CommandClass::NoHandler:
+        classification = QStringLiteral("no-handler");
+        break;
+    case CommandClass::Unresolved:
+        classification = QStringLiteral("unresolved");
+        break;
+    }
+    action->setProperty("originalCommandClass", classification);
     connect(action, &QAction::triggered, this, [this, commandIdentifier] {
         executeCommand(commandIdentifier);
     });
-    m_commandActions[commandIdentifier].append(action);
+    connect(action, &QAction::hovered, this, [this, action] {
+        if (m_status0) m_status0->setText(action->statusTip());
+    });
+    m_commandActions[commandIdentifier].append(QPointer<QAction>(action));
+}
+
+QAction* CMainFrame::InsertDynamicCommand(
+    QMenu* menu, QAction* before, const QString& text,
+    const QString& commandIdentifier)
+{
+    if (!menu) return nullptr;
+    auto* action = new QAction(text, menu);
+    configureCommandAction(action, commandIdentifier);
+    menu->insertAction(before, action);
     return action;
+}
+
+void CMainFrame::RemoveDynamicCommand(QMenu* menu, QAction* action)
+{
+    if (!action) return;
+    const QString commandIdentifier = action->data().toString();
+    if (!commandIdentifier.isEmpty()) {
+        m_commandActions[commandIdentifier].removeAll(
+            QPointer<QAction>(action));
+        if (m_commandActions[commandIdentifier].isEmpty())
+            m_commandActions.remove(commandIdentifier);
+    }
+    if (menu) menu->removeAction(action);
+    delete action;
+}
+
+void CMainFrame::unregisterMenuActions(QMenu* menu)
+{
+    if (!menu) return;
+    const QList<QAction*> actions = menu->actions();
+    for (QAction* action : actions) {
+        if (action->menu()) unregisterMenuActions(action->menu());
+        const QString commandIdentifier = action->data().toString();
+        if (commandIdentifier.isEmpty()) continue;
+        m_commandActions[commandIdentifier].removeAll(
+            QPointer<QAction>(action));
+        if (m_commandActions[commandIdentifier].isEmpty())
+            m_commandActions.remove(commandIdentifier);
+    }
+}
+
+bool CMainFrame::IsRegisteredMemberMenu(QMenu* menu) const
+{
+    return menu && m_memberMenus.contains(menu);
+}
+
+void CMainFrame::ConfigureCommandMenu(QMenu* menu)
+{
+    if (!menu
+        || menu->property("originalCommandMenuConfigured").toBool()) {
+        return;
+    }
+    menu->setProperty("originalCommandMenuConfigured", true);
+    connect(menu, &QMenu::aboutToShow,
+            this, &CMainFrame::updateCommandUi);
+    connect(menu, &QMenu::hovered, this,
+            [this](QAction* action) {
+                if (!m_status0) return;
+                if (!action || action->isSeparator()
+                    || action->menu()
+                    || action->statusTip().isEmpty()) {
+                    m_status0->setText(m_statusPaneStrings[0]);
+                } else {
+                    m_status0->setText(action->statusTip());
+                }
+            });
+    connect(menu, &QMenu::aboutToHide, this, [this] {
+        if (m_status0)
+            m_status0->setText(m_statusPaneStrings[0]);
+    });
+}
+
+void CMainFrame::ConfigureContextMenu(QMenu* menu)
+{
+    if (!menu) return;
+    ConfigureCommandMenu(menu);
+    for (QAction* action : menu->actions()) {
+        if (!action) continue;
+        if (QMenu* submenu = action->menu()) {
+            ConfigureContextMenu(submenu);
+            continue;
+        }
+        const QString commandIdentifier = action->data().toString();
+        if (!commandIdentifier.isEmpty())
+            action->setStatusTip(commandStatusText(commandIdentifier));
+    }
 }
 
 void CMainFrame::appendMenuItems(QMenu* menu, const QList<OriginalMenuItem>& items)
@@ -420,14 +608,24 @@ void CMainFrame::appendMenuItems(QMenu* menu, const QList<OriginalMenuItem>& ite
             menu->addSeparator();
         } else if (item.type == OriginalMenuItemType::Popup) {
             QMenu* popup = menu->addMenu(item.text);
-            connect(popup, &QMenu::aboutToShow, this, &CMainFrame::updateCommandUi);
+            ConfigureCommandMenu(popup);
             appendMenuItems(popup, item.children);
+            bool hasList = false;
+            bool hasIcon = false;
             for (const OriginalMenuItem& child : item.children) {
                 if (child.commandIdentifier == QLatin1String("ID_DEFINE_MACRO")) {
                     m_macroMenus.append(popup);
-                    break;
                 }
+                hasList = hasList
+                    || child.commandIdentifier
+                        == QLatin1String("ID_VIEW_LIST");
+                hasIcon = hasIcon
+                    || child.commandIdentifier
+                        == QLatin1String("ID_VIEW_ICON");
             }
+            if (hasList && hasIcon)
+                m_memberListPopupActions.append(
+                    QPointer<QAction>(popup->menuAction()));
         } else {
             QAction* action = addCommand(menu, item.text, item.commandIdentifier);
             if (item.commandIdentifier
@@ -451,6 +649,16 @@ void CMainFrame::appendMenuItems(QMenu* menu, const QList<OriginalMenuItem>& ite
         && !m_memberMenus.contains(menu)) {
         m_memberMenus.append(menu);
     }
+    makeExclusiveMenuGroup(
+        menu, {QStringLiteral("ID_VIEW_COMICS"),
+               QStringLiteral("ID_VIEW_TEXT")});
+    makeExclusiveMenuGroup(
+        menu, {QStringLiteral("ID_VIEW_LIST"),
+               QStringLiteral("ID_VIEW_ICON")});
+    makeExclusiveMenuGroup(
+        menu, {QStringLiteral("ID_MAKEADMIN"),
+               QStringLiteral("ID_MAKESPEAKER"),
+               QStringLiteral("ID_MAKESPECTATOR")});
 }
 
 void CMainFrame::UpdateMacroMenu()
@@ -469,10 +677,7 @@ void CMainFrame::UpdateMacroMenu()
         if (defineIndex < 0) continue;
         for (INT index = actions.size() - 1; index > defineIndex; --index) {
             QAction* action = actions[index];
-            const QString command = action->data().toString();
-            if (!command.isEmpty()) m_commandActions[command].removeAll(action);
-            menu->removeAction(action);
-            delete action;
+            RemoveDynamicCommand(menu, action);
         }
         BOOL present = FALSE;
         for (INT macro = 0; macro < NMACROS; ++macro) {
@@ -482,11 +687,11 @@ void CMainFrame::UpdateMacroMenu()
                 present = TRUE;
             }
             const QString command = QStringLiteral("ID_MACRO_A%1").arg(macro);
-            QAction* action = addCommand(menu,
-                theApp.m_macros[macro].m_strName, command);
-            action->setShortcut(QKeySequence(
-                Qt::ALT | static_cast<Qt::Key>(Qt::Key_0 + macro)));
-            action->setShortcutContext(Qt::ApplicationShortcut);
+            addCommand(menu,
+                QStringLiteral("%1\tAlt+%2")
+                    .arg(theApp.m_macros[macro].m_strName)
+                    .arg(macro),
+                command);
         }
     }
     updateCommandUi();
@@ -498,8 +703,66 @@ void CMainFrame::createMenus()
     for (const OriginalMenuItem& item : root) {
         if (item.type != OriginalMenuItemType::Popup) continue;
         QMenu* menu = menuBar()->addMenu(item.text);
-        connect(menu, &QMenu::aboutToShow, this, &CMainFrame::updateCommandUi);
+        ConfigureCommandMenu(menu);
         appendMenuItems(menu, item.children);
+        for (const OriginalMenuItem& child : item.children) {
+            if (child.commandIdentifier
+                == QLatin1String("ID_WINDOW_CASCADE")) {
+                m_windowMenu = menu;
+                connect(menu, &QMenu::aboutToShow,
+                        this, &CMainFrame::updateWindowMenu);
+                break;
+            }
+        }
+    }
+}
+
+void CMainFrame::updateWindowMenu()
+{
+    if (!m_windowMenu || !m_mdiArea) return;
+    for (const QPointer<QAction>& action :
+         std::as_const(m_windowDocumentActions)) {
+        if (!action) continue;
+        m_windowMenu->removeAction(action);
+        delete action;
+    }
+    m_windowDocumentActions.clear();
+    if (m_windowDocumentSeparator) {
+        m_windowMenu->removeAction(m_windowDocumentSeparator);
+        delete m_windowDocumentSeparator;
+        m_windowDocumentSeparator = nullptr;
+    }
+
+    QList<CChildFrame*> visibleFrames;
+    for (QMdiSubWindow* window :
+         m_mdiArea->subWindowList(QMdiArea::CreationOrder)) {
+        auto* child = dynamic_cast<CChildFrame*>(window);
+        if (child && child->GetDocument() && !child->isHidden())
+            visibleFrames.append(child);
+    }
+    if (visibleFrames.isEmpty()) return;
+
+    m_windowDocumentSeparator = m_windowMenu->addSeparator();
+    const INT sourceMdiWindowLimit = 9;
+    const INT count = std::min(
+        sourceMdiWindowLimit,
+        static_cast<INT>(visibleFrames.size()));
+    for (INT index = 0; index < count; ++index) {
+        CChildFrame* child = visibleFrames.at(index);
+        CChatDoc* document = child->GetDocument();
+        QAction* action = m_windowMenu->addAction(
+            QStringLiteral("&%1 %2")
+                .arg(index + 1)
+                .arg(quoteMenuAmpersands(document->GetTitle())));
+        action->setCheckable(true);
+        action->setChecked(child == m_mdiArea->activeSubWindow());
+        action->setProperty(
+            "originalMdiDocument",
+            QVariant::fromValue<void*>(document));
+        connect(action, &QAction::triggered, this,
+                [this, document] { ActivateDocument(document); });
+        m_windowDocumentActions.append(
+            QPointer<QAction>(action));
     }
 }
 
@@ -510,7 +773,27 @@ void CMainFrame::createAccelerators()
         const QKeySequence sequence = acceleratorSequence(accelerator);
         if (sequence.isEmpty()) continue;
         auto* shortcut = new QShortcut(sequence, this);
-        shortcut->setContext(Qt::ApplicationShortcut);
+        shortcut->setContext(Qt::WindowShortcut);
+        shortcut->setProperty("originalCommandIdentifier",
+                              accelerator.commandIdentifier);
+        QString classification;
+        switch (commandClass(accelerator.commandIdentifier)) {
+        case CommandClass::Active:
+            classification = QStringLiteral("active");
+            break;
+        case CommandClass::Deferred:
+            classification = QStringLiteral("deferred");
+            break;
+        case CommandClass::NoHandler:
+            classification = QStringLiteral("no-handler");
+            break;
+        case CommandClass::Unresolved:
+            classification = QStringLiteral("unresolved");
+            break;
+        }
+        shortcut->setProperty("originalCommandClass", classification);
+        m_commandShortcuts[accelerator.commandIdentifier].append(
+            QPointer<QShortcut>(shortcut));
         connect(shortcut, &QShortcut::activated, this,
                 [this, command = accelerator.commandIdentifier] {
                     executeCommand(command);
@@ -531,17 +814,24 @@ void CMainFrame::createToolBars()
         [this]() -> QMenu* {
             const QList<QAction*> menus = menuBar()->actions();
             return menus.size() > 6 ? menus[6]->menu() : nullptr;
-        });
+        },
+        [this](QAction* action, const QString& command) {
+            configureCommandAction(action, command);
+        },
+        [this](QMenu* menu) { ConfigureCommandMenu(menu); });
     if (!theApp.m_pbCoolBarState.isEmpty())
         m_wndToolBar->LoadStateFromBuffer(theApp.m_pbCoolBarState);
 }
 
 void CMainFrame::createStatusBar()
 {
-    m_status0 = new QLabel(originalResourceString(QStringLiteral("ID_DISCONNECTED")), this);
+    m_statusPaneStrings[0] =
+        originalResourceString(QStringLiteral("ID_DISCONNECTED"));
     QString memberText = originalResourceString(QStringLiteral("ID_USER_PLURAL"));
     memberText.replace(QStringLiteral("%1"), QStringLiteral("0"));
-    m_status1 = new QLabel(memberText, this);
+    m_statusPaneStrings[1] = memberText;
+    m_status0 = new QLabel(m_statusPaneStrings[0], this);
+    m_status1 = new QLabel(m_statusPaneStrings[1], this);
     m_status0->setFrameStyle(QFrame::Panel | QFrame::Sunken);
     m_status1->setFrameStyle(QFrame::Panel | QFrame::Sunken);
     m_status1->setFixedWidth(originalResourceString(
@@ -553,19 +843,194 @@ void CMainFrame::createStatusBar()
 
 void CMainFrame::SetStatusPaneString(int pane, const QString& text)
 {
+    if (pane < 0 || pane >= 2) return;
+    m_statusPaneStrings[pane] = text;
     if (pane == 0 && m_status0) m_status0->setText(text);
     else if (pane == 1 && m_status1) m_status1->setText(text);
 }
 
-bool CMainFrame::commandIsPorted(const QString& commandIdentifier) const
+void CMainFrame::UpdateAdminMenu(CChatDoc* document)
+{
+    const bool showAdminMenu = document && document->m_puiSelf
+        && document->m_puiSelf->IsOperator();
+    const QList<OriginalMenuItem> resource =
+        originalMenuResource(QStringLiteral("IDR_ADMIN"));
+    const QList<OriginalMenuItem> adminItems =
+        !resource.isEmpty()
+            && resource.first().type == OriginalMenuItemType::Popup
+        ? resource.first().children : QList<OriginalMenuItem>();
+
+    for (QMenu* memberMenu : std::as_const(m_memberMenus)) {
+        if (!memberMenu) continue;
+        QAction* existing = m_adminMenuActions.value(memberMenu);
+        if (showAdminMenu && !existing && !adminItems.isEmpty()) {
+            QAction* separator = memberMenu->addSeparator();
+            auto* adminMenu = new QMenu(
+                originalResourceString(
+                    QStringLiteral("IDS_ADMINMENU_LABEL")),
+                memberMenu);
+            ConfigureCommandMenu(adminMenu);
+            appendMenuItems(adminMenu, adminItems);
+            m_adminSeparators.insert(memberMenu, separator);
+            m_adminMenuActions.insert(memberMenu,
+                                      memberMenu->addMenu(adminMenu));
+        } else if (!showAdminMenu && existing) {
+            QMenu* adminMenu = existing->menu();
+            unregisterMenuActions(adminMenu);
+            memberMenu->removeAction(existing);
+            m_adminMenuActions.remove(memberMenu);
+            if (adminMenu) delete adminMenu;
+
+            if (QAction* separator =
+                    m_adminSeparators.take(memberMenu)) {
+                memberMenu->removeAction(separator);
+                delete separator;
+            }
+        }
+    }
+}
+
+QWidget* CMainFrame::GetCommandFocusWidget() const
+{
+    QWidget* focus = QApplication::focusWidget();
+    if (focus && !isMenuFocusWidget(focus)) return focus;
+    return m_commandFocusWidget;
+}
+
+void CMainFrame::RefreshCommandUi()
+{
+    updateCommandUi();
+}
+
+void CMainFrame::scheduleCommandUiUpdate()
+{
+    if (m_uiUpdatePending || m_destroying) return;
+    m_uiUpdatePending = true;
+    QTimer::singleShot(0, this, [this] {
+        m_uiUpdatePending = false;
+        if (!m_destroying) updateCommandUi();
+    });
+}
+
+bool CMainFrame::eventFilter(QObject* watched, QEvent* event)
+{
+    if (!event) return QMainWindow::eventFilter(watched, event);
+    switch (event->type()) {
+    case QEvent::FocusIn:
+        if (auto* widget = qobject_cast<QWidget*>(watched);
+            widget && !isMenuFocusWidget(widget)) {
+            m_commandFocusWidget = widget;
+        }
+        scheduleCommandUiUpdate();
+        break;
+    case QEvent::FocusOut:
+    case QEvent::KeyRelease:
+    case QEvent::MouseButtonRelease:
+    case QEvent::Shortcut:
+        scheduleCommandUiUpdate();
+        break;
+    case QEvent::Leave:
+        if (qobject_cast<QToolBar*>(watched) && m_status0)
+            m_status0->setText(m_statusPaneStrings[0]);
+        break;
+    case QEvent::Hide:
+        if (qobject_cast<QMenu*>(watched) && m_status0)
+            m_status0->setText(m_statusPaneStrings[0]);
+        [[fallthrough]];
+    case QEvent::Show:
+    case QEvent::Move:
+    case QEvent::Resize:
+    case QEvent::WindowStateChange:
+    case QEvent::ZOrderChange:
+        if (dynamic_cast<CChildFrame*>(watched)) {
+            QTimer::singleShot(0, this, [this] {
+                if (!m_destroying) UpdateVisibilityInfo();
+            });
+        }
+        scheduleCommandUiUpdate();
+        break;
+    default:
+        break;
+    }
+    return QMainWindow::eventFilter(watched, event);
+}
+
+void CMainFrame::resizeEvent(QResizeEvent* event)
+{
+    QMainWindow::resizeEvent(event);
+    AutoArrangeWindows();
+}
+
+void CMainFrame::UpdateVisibilityInfo()
+{
+    if (!m_mdiArea || m_destroying) return;
+    const QList<QMdiSubWindow*> windows =
+        m_mdiArea->subWindowList(QMdiArea::StackingOrder);
+    for (INT index = 0; index < windows.size(); ++index) {
+        auto* frame = dynamic_cast<CChildFrame*>(windows.at(index));
+        if (!frame || !frame->GetDocument()) continue;
+        if (frame->isMinimized()) {
+            frame->GetDocument()->SetObscured(TRUE);
+            continue;
+        }
+
+        const QRect frameRect = frame->geometry();
+        const qint64 frameArea =
+            qint64(frameRect.width()) * frameRect.height();
+        qint64 coveredArea = 0;
+        for (INT above = index + 1; above < windows.size(); ++above) {
+            QMdiSubWindow* covering = windows.at(above);
+            if (!covering) continue;
+            const QRect intersection =
+                frameRect.intersected(covering->geometry());
+            coveredArea +=
+                qint64(intersection.width()) * intersection.height();
+        }
+        frame->GetDocument()->SetObscured(
+            frameArea <= 0 || 2 * coveredArea >= frameArea);
+    }
+}
+
+void CMainFrame::ArrangeIcons()
+{
+    if (!m_mdiArea) return;
+    QList<QMdiSubWindow*> icons;
+    for (QMdiSubWindow* window :
+         m_mdiArea->subWindowList(QMdiArea::StackingOrder)) {
+        if (!window->isHidden() && window->isMinimized())
+            icons.append(window);
+    }
+    if (icons.isEmpty()) return;
+
+    const QRect area = m_mdiArea->viewport()->rect();
+    const int iconHeight = std::max(
+        style()->pixelMetric(QStyle::PM_TitleBarHeight) + 8, 24);
+    const int iconWidth = std::max(
+        area.width() / static_cast<int>(icons.size()), 160);
+    int left = area.left();
+    int top = area.bottom() - iconHeight + 1;
+    for (QMdiSubWindow* icon : icons) {
+        const int width = std::min(iconWidth,
+                                   area.right() - left + 1);
+        icon->setGeometry(left, top, std::max(width, 1), iconHeight);
+        left += iconWidth;
+        if (left > area.right()) break;
+    }
+    UpdateVisibilityInfo();
+}
+
+CMainFrame::CommandClass CMainFrame::commandClass(
+    const QString& commandIdentifier) const
 {
     if (commandIdentifier.startsWith(QLatin1String("ID_MACRO_A"))) {
         bool valid = false;
         const INT macro = commandIdentifier.mid(10).toInt(&valid);
-        return valid && macro >= 0 && macro < NMACROS;
+        return valid && macro >= 0 && macro < NMACROS
+            ? CommandClass::Active : CommandClass::Unresolved;
     }
-    static const QStringList ported = {
+    static const QSet<QString> active = {
         QStringLiteral("ID_APP_EXIT"),
+        QStringLiteral("ID_APP_ABOUT"),
         QStringLiteral("ID_FILE_NEW"),
         QStringLiteral("ID_FILE_CLOSE"),
         QStringLiteral("ID_FILE_PRINT"),
@@ -581,6 +1046,7 @@ bool CMainFrame::commandIsPorted(const QString& commandIdentifier) const
         QStringLiteral("ID_SESSION_NEWROOM"),
         QStringLiteral("ID_SESSION_LEAVE"),
         QStringLiteral("ID_ROOM_CREATEROOM"),
+        QStringLiteral("ID_MOTD"),
         QStringLiteral("ID_VIEW_TOOLBAR_MAIN"),
         QStringLiteral("ID_VIEW_TOOLBAR_MEMBER"),
         QStringLiteral("ID_VIEW_TOOLBAR_TEXT"),
@@ -611,7 +1077,9 @@ bool CMainFrame::commandIsPorted(const QString& commandIdentifier) const
         QStringLiteral("ID_WINDOW_TILE_HORZ"),
         QStringLiteral("ID_WINDOW_TILE_VERT"),
         QStringLiteral("ID_WINDOW_TILE_AUTO"),
+        QStringLiteral("ID_WINDOW_ARRANGE"),
         QStringLiteral("ID_MEMBER_GETINFO"),
+        QStringLiteral("ID_MEMBER_GETCHAR"),
         QStringLiteral("ID_MEMBER_IGNORE"),
         QStringLiteral("ID_ADDTONOTIFICATIONS"),
         QStringLiteral("ID_GETIDENTITY"),
@@ -627,160 +1095,280 @@ bool CMainFrame::commandIsPorted(const QString& commandIdentifier) const
         QStringLiteral("ID_WHISPERBOX_MLIST"),
         QStringLiteral("ID_ADMINISTRATOR_KICK"),
         QStringLiteral("ID_ADMIN_BAN"),
+        QStringLiteral("ID_ADMIN_BGRNDSYNC"),
         QStringLiteral("ID_MAKEADMIN"),
         QStringLiteral("ID_MAKESPEAKER"),
         QStringLiteral("ID_MAKESPECTATOR"),
-        QStringLiteral("ID_INVITE")
+        QStringLiteral("ID_INVITE"),
+        QStringLiteral("ID_HELP_FREESTUFF"),
+        QStringLiteral("ID_HELP_PRODUCTNEWS"),
+        QStringLiteral("ID_HELP_FAQ"),
+        QStringLiteral("ID_HELP_ONLINESUPPORT"),
+        QStringLiteral("ID_HELP_BESTOFWEB"),
+        QStringLiteral("ID_HELP_SEARCHTHEWEB"),
+        QStringLiteral("ID_HELP_MSHOMEPAGE")
     };
-    return ported.contains(commandIdentifier);
+    if (active.contains(commandIdentifier)) return CommandClass::Active;
+
+    static const QSet<QString> deferred = {
+        QStringLiteral("ID_FILE_OPEN"),
+        QStringLiteral("ID_FILE_SAVE"),
+        QStringLiteral("ID_FILE_SAVE_AS"),
+        QStringLiteral("ID_FILE_CREATESHORTCUT"),
+        QStringLiteral("ID_FILE_PRINT_PREVIEW"),
+        QStringLiteral("ID_FAVORITES_ADDTOFAVORITES"),
+        QStringLiteral("ID_FAVORITES_OPENFAVORITES"),
+        QStringLiteral("ID_TURN_OFF_SOUNDS"),
+        QStringLiteral("ID_PLAY_SOUND"),
+        QStringLiteral("ID_START_NETMEETING"),
+        QStringLiteral("ID_SEND_FILE"),
+        QStringLiteral("ID_HELP_TOPICS"),
+        QStringLiteral("ID_HELP_RELEASENOTES")
+    };
+    if (deferred.contains(commandIdentifier)) return CommandClass::Deferred;
+    if (commandIdentifier == QLatin1String("ID_VIEW_MACROS"))
+        return CommandClass::NoHandler;
+    return CommandClass::Unresolved;
 }
 
 void CMainFrame::updateCommandUi()
 {
-    for (auto iterator = m_commandActions.begin(); iterator != m_commandActions.end(); ++iterator)
-        for (QAction* action : iterator.value()) action->setEnabled(commandIsPorted(iterator.key()));
+    for (auto iterator = m_commandActions.begin();
+         iterator != m_commandActions.end(); ++iterator) {
+        for (INT index = iterator.value().size() - 1;
+             index >= 0; --index) {
+            if (!iterator.value().at(index))
+                iterator.value().removeAt(index);
+        }
+        const bool active = commandClass(iterator.key())
+            == CommandClass::Active;
+        for (const QPointer<QAction>& action : iterator.value()) {
+            if (action) action->setEnabled(active);
+        }
+    }
 
-    const ConnectionStatus status = m_doc ? m_doc->GetConnectionStatus() : CX_DISCONNECTED;
-    const ConnectionStatus serverStatus = GetIrcProto()
-        ? GetIrcProto()->GetConnectionStatus() : CX_DISCONNECTED;
     setActionsEnabled(m_commandActions, QStringLiteral("ID_SESSION_CONNECT"),
-                      serverStatus == CX_DISCONNECTED);
+                      theApp.OnUpdateSessionConnect());
     setActionsEnabled(m_commandActions, QStringLiteral("ID_SESSION_DISCONNECT"),
-                      serverStatus != CX_DISCONNECTED);
+                      theApp.OnUpdateDisconnect());
     setActionsEnabled(m_commandActions, QStringLiteral("ID_SESSION_NEWROOM"),
-                      serverStatus == CX_INCHANNEL
-                          || serverStatus == CX_NOCHANNEL);
+                      theApp.OnUpdateNewroom());
     setActionsEnabled(m_commandActions, QStringLiteral("ID_ROOM_CREATEROOM"),
-                      serverStatus == CX_INCHANNEL
-                          || serverStatus == CX_NOCHANNEL);
+                      theApp.OnUpdateNewroom());
     setActionsEnabled(m_commandActions, QStringLiteral("ID_SESSION_LEAVE"),
-                      m_doc && status == CX_INCHANNEL);
+                      m_doc && m_doc->OnUpdateLeave());
     setActionsEnabled(m_commandActions, QStringLiteral("ID_MOTD"),
-                      (serverStatus == CX_INCHANNEL
-                       || serverStatus == CX_NOCHANNEL)
-                          && !theApp.m_bDisableMOTD);
+                      theApp.OnUpdateMotd());
+    BOOL checked = FALSE;
     setActionsEnabled(m_commandActions, QStringLiteral("ID_AWAY_TOGGLE"),
-                      serverStatus == CX_INCHANNEL
-                          || serverStatus == CX_NOCHANNEL);
-    const bool canSearch = !theApp.m_bInSearch
-        && (serverStatus == CX_INCHANNEL || serverStatus == CX_NOCHANNEL);
-    setActionsEnabled(m_commandActions, QStringLiteral("ID_CHATROOM_LIST"),
-                      canSearch);
-    setActionsEnabled(m_commandActions, QStringLiteral("ID_USER_LIST"),
-                      canSearch);
+                      theApp.OnUpdateAwayToggle(&checked));
     setActionsChecked(m_commandActions, QStringLiteral("ID_AWAY_TOGGLE"),
-                      theApp.m_bAway);
+                      checked);
+    setActionsEnabled(m_commandActions, QStringLiteral("ID_CHATROOM_LIST"),
+                      theApp.OnUpdateCanSearch());
+    setActionsEnabled(m_commandActions, QStringLiteral("ID_USER_LIST"),
+                      theApp.OnUpdateCanSearch());
     setActionsEnabled(m_commandActions, QStringLiteral("ID_FILE_CLOSE"),
                       m_doc != nullptr);
     setActionsEnabled(m_commandActions, QStringLiteral("ID_FILE_PRINT"),
-                      m_doc != nullptr && m_chatView != nullptr);
+                      m_doc && m_chatView
+                          && m_doc->OnUpdateFilePrint());
     setActionsEnabled(m_commandActions,
                       QStringLiteral("ID_FILE_PRINT_SETUP"), true);
 
-    const bool comicView = m_doc && m_doc->m_bComicView;
-    const bool statusView = m_doc && m_doc->m_bStatusView;
+    const bool hasDocument = m_doc != nullptr;
+    BOOL comicsChecked = FALSE;
+    BOOL textChecked = FALSE;
+    BOOL comicsEnabled = FALSE;
+    BOOL textEnabled = FALSE;
+    if (m_doc) {
+        if (m_doc->m_bStatusView) {
+            auto* statusView =
+                dynamic_cast<CStatusView*>(m_doc->m_textView);
+            if (statusView) {
+                comicsEnabled =
+                    statusView->OnUpdateViewComics(&comicsChecked);
+                textEnabled =
+                    statusView->OnUpdateViewText(&textChecked);
+            }
+        } else {
+            comicsEnabled =
+                m_doc->OnUpdateViewComics(&comicsChecked);
+            textEnabled =
+                m_doc->OnUpdateViewText(&textChecked);
+        }
+    }
     setActionsEnabled(m_commandActions, QStringLiteral("ID_VIEW_COMICS"),
-                      !statusView && (!m_doc || !m_doc->m_proto
-                          || !(m_doc->m_proto->m_dwModes & CM_NOFORMAT)));
+                      comicsEnabled);
     setActionsEnabled(m_commandActions, QStringLiteral("ID_VIEW_TEXT"),
-                      !statusView);
-    setActionsChecked(m_commandActions, QStringLiteral("ID_VIEW_COMICS"), comicView);
-    setActionsChecked(m_commandActions, QStringLiteral("ID_VIEW_TEXT"), !comicView);
-    setActionsEnabled(m_commandActions, QStringLiteral("ID_VIEW_ICON"), comicView);
-    setActionsEnabled(m_commandActions, QStringLiteral("ID_VIEW_LIST"),
-                      comicView && status == CX_INCHANNEL);
+                      textEnabled);
+    setActionsChecked(m_commandActions, QStringLiteral("ID_VIEW_COMICS"),
+                      comicsChecked);
+    setActionsChecked(m_commandActions, QStringLiteral("ID_VIEW_TEXT"),
+                      textChecked);
+    BOOL iconChecked = FALSE;
+    setActionsEnabled(m_commandActions, QStringLiteral("ID_VIEW_ICON"),
+                      m_doc
+                          && m_doc->OnUpdateViewIcon(&iconChecked));
     setActionsChecked(m_commandActions, QStringLiteral("ID_VIEW_ICON"),
-                      comicView && m_doc && m_doc->m_bIconMembers);
+                      iconChecked);
+    BOOL listChecked = FALSE;
+    setActionsEnabled(m_commandActions, QStringLiteral("ID_VIEW_LIST"),
+                      m_doc
+                          && m_doc->OnUpdateViewList(
+                              FALSE, &listChecked));
     setActionsChecked(m_commandActions, QStringLiteral("ID_VIEW_LIST"),
-                      !m_doc || !m_doc->m_bIconMembers);
+                      listChecked);
+    for (const QPointer<QAction>& popup :
+         std::as_const(m_memberListPopupActions)) {
+        if (popup)
+            popup->setEnabled(
+                m_doc && m_doc->OnUpdateViewList(TRUE));
+    }
 
     setActionsEnabled(m_commandActions, QStringLiteral("ID_MEMBER_GETINFO"),
-                      hasComicSelection(m_doc));
-    bool allIgnored = false;
+                      m_doc && m_doc->OnUpdateMemberGetinfo());
+    setActionsEnabled(
+        m_commandActions, QStringLiteral("ID_MEMBER_GETCHAR"),
+        m_doc && m_doc->OnUpdateGetComicCharacter());
+    BOOL allIgnored = FALSE;
     setActionsEnabled(m_commandActions, QStringLiteral("ID_MEMBER_IGNORE"),
-                      ignoreSelectionState(m_doc, &allIgnored));
+                      m_doc
+                          && m_doc->OnUpdateMemberIgnore(
+                              &allIgnored));
     setActionsChecked(m_commandActions, QStringLiteral("ID_MEMBER_IGNORE"),
                       allIgnored);
     setActionsEnabled(m_commandActions,
                       QStringLiteral("ID_ADDTONOTIFICATIONS"),
-                      m_doc && m_doc->GetSingleSelectedMember()
-                          && theApp.m_iAutoPage == -1
-                          && !m_doc->GetSingleSelectedMember()
-                                  ->GetFullName().isEmpty());
-    const bool selectedInRoom = m_doc && status == CX_INCHANNEL
-        && m_doc->SelectedMemberCount() > 0;
+                      m_doc && m_doc->OnUpdateAddToNotifs());
     setActionsEnabled(m_commandActions, QStringLiteral("ID_GETIDENTITY"),
-                      selectedInRoom);
+                      m_doc && m_doc->OnUpdateGetidentity());
     setActionsEnabled(m_commandActions, QStringLiteral("ID_GET_VERSION"),
-                      selectedInRoom);
+                      m_doc && m_doc->OnUpdateGetidentity());
     setActionsEnabled(m_commandActions, QStringLiteral("ID_PING_USER"),
-                      selectedInRoom);
+                      m_doc && m_doc->OnUpdateGetidentity());
     setActionsEnabled(m_commandActions, QStringLiteral("ID_GET_LOCALTIME"),
-                      selectedInRoom);
-    CUserInfo* singleMember = m_doc ? m_doc->GetSingleSelectedMember()
-                                    : nullptr;
+                      m_doc && m_doc->OnUpdateGetidentity());
     setActionsEnabled(m_commandActions, QStringLiteral("ID_SEND_EMAIL"),
-                      singleMember && !singleMember->IsSelf()
-                          && singleMember->IsComicUser());
+                      m_doc && m_doc->OnUpdateComicUserNotSelf());
     setActionsEnabled(m_commandActions, QStringLiteral("ID_VISIT_HOMEPAGE"),
-                      singleMember && singleMember->IsComicUser());
+                      m_doc && m_doc->OnUpdateVisitHomepage());
     setActionsEnabled(m_commandActions, QStringLiteral("ID_WHISPERBOX_MLIST"),
-                      singleMember && !singleMember->IsSelf());
+                      m_doc && m_doc->OnUpdate1SelectionNotSelf());
     setActionsEnabled(m_commandActions,
                       QStringLiteral("ID_ADMINISTRATOR_KICK"),
-                      singleMember && !singleMember->IsSelf());
-    const int selectedMembers = m_doc && m_doc->m_memberList
-        ? m_doc->SelectedMemberCount() : 2;
+                      m_doc && m_doc->OnUpdate1SelectionNotSelf());
     setActionsEnabled(m_commandActions, QStringLiteral("ID_ADMIN_BAN"),
-                      selectedMembers < 2
-                          && (!singleMember || !singleMember->IsSelf()));
+                      m_doc && m_doc->OnUpdateAdminBan());
     setActionsEnabled(m_commandActions, QStringLiteral("ID_INVITE"),
-                      bCanInvite());
-    const bool canSetRole = singleMember && m_doc && m_doc->m_puiSelf
-        && m_doc->m_puiSelf->IsOperator() && status == CX_INCHANNEL;
+                      m_doc && m_doc->OnUpdateInvite());
+    BOOL adminChecked = FALSE;
     setActionsEnabled(m_commandActions, QStringLiteral("ID_MAKEADMIN"),
-                      canSetRole);
-    setActionsEnabled(m_commandActions, QStringLiteral("ID_MAKESPEAKER"),
-                      canSetRole);
-    setActionsEnabled(m_commandActions, QStringLiteral("ID_MAKESPECTATOR"),
-                      canSetRole && m_doc->m_proto
-                          && (m_doc->m_proto->m_dwModes & CM_MODERATED));
+                      m_doc
+                          && m_doc->OnUpdateMakeadmin(
+                              &adminChecked));
     setActionsChecked(m_commandActions, QStringLiteral("ID_MAKEADMIN"),
-                      singleMember && singleMember->IsOperator());
+                      adminChecked);
+    BOOL speakerChecked = FALSE;
+    setActionsEnabled(m_commandActions, QStringLiteral("ID_MAKESPEAKER"),
+                      m_doc
+                          && m_doc->OnUpdateMakespeaker(
+                              &speakerChecked));
     setActionsChecked(m_commandActions, QStringLiteral("ID_MAKESPEAKER"),
-                      singleMember && singleMember->IsSpeaker()
-                          && !singleMember->IsOperator());
+                      speakerChecked);
+    BOOL spectatorChecked = FALSE;
+    setActionsEnabled(m_commandActions, QStringLiteral("ID_MAKESPECTATOR"),
+                      m_doc
+                          && m_doc->OnUpdateMakespectator(
+                              &spectatorChecked));
     setActionsChecked(m_commandActions, QStringLiteral("ID_MAKESPECTATOR"),
-                      singleMember && singleMember->IsSpectator());
+                      spectatorChecked);
     setActionsEnabled(m_commandActions, QStringLiteral("ID_CHANNELPROPS"),
-                      m_doc && status == CX_INCHANNEL && g_puiSelf
-                          && m_doc->m_puiSelf
-                          && !m_doc->m_allChannelPuis.isEmpty());
+                      m_doc && m_doc->OnUpdateChannelprops());
+    setActionsEnabled(m_commandActions, QStringLiteral("ID_ADMIN_BGRNDSYNC"),
+                      m_doc && m_doc->OnUpdateAdminBgrndsync());
 
-    setActionsChecked(m_commandActions, QStringLiteral("ID_VIEW_TOOLBAR_MAIN"),
-                      (theApp.m_iShowBars & SB_TOOLBAR_MAIN) != 0);
-    setActionsChecked(m_commandActions, QStringLiteral("ID_VIEW_TOOLBAR_MEMBER"),
-                      (theApp.m_iShowBars & SB_TOOLBAR_MEMBER) != 0);
-    setActionsChecked(m_commandActions, QStringLiteral("ID_VIEW_TOOLBAR_TEXT"),
-                      (theApp.m_iShowBars & SB_TOOLBAR_TEXT) != 0);
+    for (const auto& toolbar : {
+             std::pair{QStringLiteral("ID_VIEW_TOOLBAR_MAIN"),
+                       UINT(ID_VIEW_TOOLBAR_MAIN)},
+             std::pair{QStringLiteral("ID_VIEW_TOOLBAR_MEMBER"),
+                       UINT(ID_VIEW_TOOLBAR_MEMBER)},
+             std::pair{QStringLiteral("ID_VIEW_TOOLBAR_TEXT"),
+                       UINT(ID_VIEW_TOOLBAR_TEXT)}}) {
+        BOOL toolbarChecked = FALSE;
+        setActionsEnabled(
+            m_commandActions, toolbar.first,
+            theApp.OnUpdateViewToolBar(
+                toolbar.second, &toolbarChecked));
+        setActionsChecked(m_commandActions, toolbar.first,
+                          toolbarChecked);
+    }
+    BOOL tabbarChecked = FALSE;
+    setActionsEnabled(m_commandActions, QStringLiteral("ID_VIEW_TABBAR"),
+                      theApp.OnUpdateViewTabbar(&tabbarChecked));
     setActionsChecked(m_commandActions, QStringLiteral("ID_VIEW_TABBAR"),
-                      m_wndTabBar && m_wndTabBar->isVisible());
+                      tabbarChecked);
     setActionsChecked(m_commandActions, QStringLiteral("ID_VIEW_STATUS_BAR"),
                       statusBar()->isVisible());
+    BOOL statusWindowChecked = FALSE;
+    setActionsEnabled(
+        m_commandActions, QStringLiteral("ID_VIEW_STATUSWINDOW"),
+        theApp.OnUpdateViewStatuswindow(&statusWindowChecked));
     setActionsChecked(m_commandActions, QStringLiteral("ID_VIEW_STATUSWINDOW"),
-                      (theApp.m_flags0 & F0_SHOWSTATUSWINDOW) != 0);
+                      statusWindowChecked);
+    BOOL loginNotifsChecked = FALSE;
+    setActionsEnabled(
+        m_commandActions, QStringLiteral("ID_VIEW_LOGINNOTIFS"),
+        theApp.OnUpdateViewLoginNotifs(&loginNotifsChecked));
     setActionsChecked(m_commandActions, QStringLiteral("ID_VIEW_LOGINNOTIFS"),
-                      theApp.m_bLoginNotifsShown);
-    const bool automationEnabled = !m_doc
-        || m_doc->GetConnectionStatus() != CX_CONNECTING;
+                      loginNotifsChecked);
     setActionsEnabled(m_commandActions, QStringLiteral("ID_VIEW_AUTOMATIONS"),
-                      automationEnabled);
+                      theApp.OnUpdateViewAutomations());
     setActionsEnabled(m_commandActions, QStringLiteral("ID_VIEW_OPTIONS"),
-                      automationEnabled);
+                      theApp.OnUpdateViewOptions());
     setActionsEnabled(m_commandActions, QStringLiteral("ID_DEFINE_MACRO"),
-                      automationEnabled);
+                      true);
+    CSayWnd* sayWindow = m_doc ? GetSay() : nullptr;
+    const bool hasSayWindow = sayWindow && sayWindow->GetSayEdit();
+    setActionsEnabled(m_commandActions, QStringLiteral("ID_CLEAR_HISTORY"),
+                      hasDocument);
+    setActionsEnabled(m_commandActions, QStringLiteral("ID_ACTIONS_SAY"),
+                      hasSayWindow);
+    setActionsEnabled(m_commandActions, QStringLiteral("ID_ACTIONS_THINK"),
+                      hasSayWindow);
+    setActionsEnabled(m_commandActions, QStringLiteral("ID_ACTIONS_WHISPER"),
+                      hasSayWindow);
+    setActionsEnabled(m_commandActions, QStringLiteral("ID_SEND_ACTION"),
+                      hasSayWindow);
     setActionsEnabled(m_commandActions, QStringLiteral("ID_SETFONT"),
-                      m_doc && !statusView);
+                      hasSayWindow);
+    BOOL colorChecked = FALSE;
+    setActionsEnabled(m_commandActions, QStringLiteral("ID_SETCOLOR"),
+                      m_doc
+                          && m_doc->OnUpdateFormat(
+                              ID_SETCOLOR, &colorChecked));
+    for (const auto& format : {
+             std::pair{QStringLiteral("ID_SWITCHBOLD"),
+                       UINT(ID_SWITCHBOLD)},
+             std::pair{QStringLiteral("ID_SWITCHITALIC"),
+                       UINT(ID_SWITCHITALIC)},
+             std::pair{QStringLiteral("ID_SWITCHUNDERLINED"),
+                       UINT(ID_SWITCHUNDERLINED)},
+             std::pair{QStringLiteral("ID_SWITCHFIXEDPITCH"),
+                       UINT(ID_SWITCHFIXEDPITCH)},
+             std::pair{QStringLiteral("ID_SWITCHSYMBOL"),
+                       UINT(ID_SWITCHSYMBOL)}}) {
+        BOOL formatChecked = FALSE;
+        setActionsEnabled(
+            m_commandActions, format.first,
+            m_doc
+                && m_doc->OnUpdateFormat(
+                    format.second, &formatChecked));
+        setActionsChecked(m_commandActions, format.first,
+                          formatChecked);
+    }
+
+    UpdateAdminMenu(m_doc);
     for (QMenu* memberMenu : std::as_const(m_memberMenus)) {
         if (!memberMenu) continue;
         if (m_doc) {
@@ -789,8 +1377,7 @@ void CMainFrame::updateCommandUi()
             for (QAction* action : memberMenu->actions()) {
                 if (action->data().toString()
                     == QLatin1String("ID_MEMBER_GETCHAR")) {
-                    memberMenu->removeAction(action);
-                    delete action;
+                    RemoveDynamicCommand(memberMenu, action);
                     break;
                 }
             }
@@ -804,45 +1391,96 @@ void CMainFrame::updateCommandUi()
     setActionsChecked(m_commandActions, QStringLiteral("ID_WINDOW_TILE_AUTO"),
                       (theApp.m_flags0 & F0_AUTOARRANGEWNDS) != 0);
 
-    QTextEdit* edit = qobject_cast<QTextEdit*>(QApplication::focusWidget());
+    bool hasVisibleWindow = false;
+    bool hasMinimizedWindow = false;
+    for (QMdiSubWindow* window : m_mdiArea->subWindowList()) {
+        if (window->isHidden()) continue;
+        hasVisibleWindow = true;
+        if (window->isMinimized()) hasMinimizedWindow = true;
+    }
+    setActionsEnabled(m_commandActions, QStringLiteral("ID_WINDOW_CASCADE"),
+                      hasVisibleWindow);
+    setActionsEnabled(m_commandActions, QStringLiteral("ID_WINDOW_TILE_HORZ"),
+                      hasVisibleWindow);
+    setActionsEnabled(m_commandActions, QStringLiteral("ID_WINDOW_TILE_VERT"),
+                      hasVisibleWindow);
+    setActionsEnabled(m_commandActions, QStringLiteral("ID_WINDOW_ARRANGE"),
+                      hasMinimizedWindow);
+
     setActionsEnabled(m_commandActions, QStringLiteral("ID_EDIT_UNDO"),
-                      edit && !edit->isReadOnly() && edit->document()->isUndoAvailable());
-    const bool hasSelection = edit && edit->textCursor().hasSelection();
+                      m_doc && m_doc->OnUpdateEditUndo());
     setActionsEnabled(m_commandActions, QStringLiteral("ID_EDIT_CUT"),
-                      hasSelection && !edit->isReadOnly());
-    setActionsEnabled(m_commandActions, QStringLiteral("ID_EDIT_COPY"), hasSelection);
+                      m_doc && m_doc->OnUpdateEditCut());
+    setActionsEnabled(m_commandActions, QStringLiteral("ID_EDIT_COPY"),
+                      m_doc && m_doc->OnUpdateEditCopy());
     setActionsEnabled(m_commandActions, QStringLiteral("ID_EDIT_DELETE"),
-                      hasSelection && !edit->isReadOnly());
-    const QClipboard* clipboard = QApplication::clipboard();
-    const QMimeData* clipboardData = clipboard ? clipboard->mimeData() : nullptr;
+                      m_doc && m_doc->OnUpdateEditDelete());
     setActionsEnabled(m_commandActions, QStringLiteral("ID_EDIT_PASTE"),
-                      edit && !edit->isReadOnly()
-                          && clipboardData && clipboardData->hasText());
-    setActionsEnabled(m_commandActions, QStringLiteral("ID_EDIT_SELECTALL"), edit != nullptr);
+                      m_doc && m_doc->OnUpdateEditPaste());
+    setActionsEnabled(m_commandActions, QStringLiteral("ID_EDIT_SELECTALL"),
+                      m_doc && m_doc->OnUpdateEditSelectAll());
+
+    for (auto iterator = m_commandShortcuts.begin();
+         iterator != m_commandShortcuts.end(); ++iterator) {
+        const CommandClass classification =
+            commandClass(iterator.key());
+        bool enabled = classification == CommandClass::Deferred
+            || classification == CommandClass::NoHandler;
+        if (classification == CommandClass::Active) {
+            if (iterator.key().startsWith(
+                    QLatin1String("ID_MACRO_A"))) {
+                bool valid = false;
+                const INT macro = iterator.key().mid(10).toInt(&valid);
+                enabled = valid && macro >= 0 && macro < NMACROS
+                    && m_doc
+                    && m_doc->OnUpdateMacro(ID_MACRO_A0 + macro);
+            } else if (iterator.key()
+                           == QLatin1String("ID_ACTIONS_SAY")
+                       || iterator.key()
+                           == QLatin1String("ID_ACTIONS_THINK")
+                       || iterator.key()
+                           == QLatin1String("ID_ACTIONS_WHISPER")
+                       || iterator.key()
+                           == QLatin1String("ID_SEND_ACTION")) {
+                enabled = hasSayWindow;
+            } else {
+                for (const QPointer<QAction>& action :
+                     m_commandActions.value(iterator.key())) {
+                    if (action && action->isEnabled()) {
+                        enabled = true;
+                        break;
+                    }
+                }
+            }
+        }
+        for (const QPointer<QShortcut>& shortcut : iterator.value()) {
+            if (shortcut) shortcut->setEnabled(enabled);
+        }
+    }
 }
 
 void CMainFrame::executeCommand(const QString& commandIdentifier)
 {
-    if (!commandIsPorted(commandIdentifier)) return;
+    if (commandClass(commandIdentifier) != CommandClass::Active) return;
 
     if (commandIdentifier == QLatin1String("ID_APP_EXIT")) {
         qApp->quit();
     } else if (commandIdentifier == QLatin1String("ID_FILE_NEW")) {
         CreateNewDocument();
     } else if (commandIdentifier == QLatin1String("ID_FILE_CLOSE")) {
-        if (QMdiSubWindow* active = m_mdiArea->activeSubWindow()) active->close();
+        if (m_doc) m_doc->OnFileClose();
     } else if (commandIdentifier == QLatin1String("ID_FILE_PRINT")) {
         if (m_chatView) m_chatView->OnFilePrint(m_printer.get(), FALSE);
     } else if (commandIdentifier == QLatin1String("ID_FILE_PRINT_SETUP")) {
         theApp.OnFilePrintSetup(m_printer.get(), this);
     } else if (commandIdentifier == QLatin1String("ID_SESSION_CONNECT")) {
-        onConnect();
+        theApp.OnSessionConnect();
     } else if (commandIdentifier == QLatin1String("ID_SESSION_DISCONNECT")) {
-        if (GetIrcProto()) GetIrcProto()->Disconnect();
+        theApp.OnDisconnect();
     } else if (commandIdentifier == QLatin1String("ID_SESSION_NEWROOM")) {
-        ChatSwitchChannel();
+        theApp.OnNewroom();
     } else if (commandIdentifier == QLatin1String("ID_ROOM_CREATEROOM")) {
-        ChatCreateRoom(g_enterInfo);
+        theApp.OnCreateroom();
     } else if (commandIdentifier == QLatin1String("ID_SESSION_LEAVE")) {
         if (m_doc) m_doc->OnLeave();
     } else if (commandIdentifier == QLatin1String("ID_MOTD")) {
@@ -854,35 +1492,30 @@ void CMainFrame::executeCommand(const QString& commandIdentifier)
     } else if (commandIdentifier == QLatin1String("ID_USER_LIST")) {
         theApp.OnUserList();
     } else if (commandIdentifier == QLatin1String("ID_VIEW_COMICS")) {
-        if (m_chatView && (!m_doc || !m_doc->m_bComicView)) m_chatView->CreateComicView(true);
+        if (m_doc) m_doc->OnViewComics();
     } else if (commandIdentifier == QLatin1String("ID_VIEW_TEXT")) {
-        if (m_chatView && m_doc && m_doc->m_bComicView) m_chatView->CreateTextView(true);
+        if (m_doc) m_doc->OnViewText();
     } else if (commandIdentifier == QLatin1String("ID_VIEW_LIST")) {
-        if (m_doc) m_doc->OnViewListAux();
+        if (m_doc) m_doc->OnViewList();
     } else if (commandIdentifier == QLatin1String("ID_VIEW_ICON")) {
         if (m_doc) m_doc->OnViewIcon();
     } else if (commandIdentifier == QLatin1String("ID_CLEAR_HISTORY")) {
         if (m_doc) m_doc->OnClearHistory();
     } else if (commandIdentifier == QLatin1String("ID_VIEW_TOOLBAR_MAIN")) {
-        if (m_wndToolBar) m_wndToolBar->ToggleBar(CHAT_TOOLBAR_MAIN);
+        theApp.OnViewToolBar(ID_VIEW_TOOLBAR_MAIN);
     } else if (commandIdentifier == QLatin1String("ID_VIEW_TOOLBAR_MEMBER")) {
-        if (m_wndToolBar) m_wndToolBar->ToggleBar(CHAT_TOOLBAR_MEMBER);
+        theApp.OnViewToolBar(ID_VIEW_TOOLBAR_MEMBER);
     } else if (commandIdentifier == QLatin1String("ID_VIEW_TOOLBAR_TEXT")) {
-        if (m_wndToolBar) m_wndToolBar->ToggleBar(CHAT_TOOLBAR_TEXT);
+        theApp.OnViewToolBar(ID_VIEW_TOOLBAR_TEXT);
     } else if (commandIdentifier == QLatin1String("ID_VIEW_TABBAR")) {
-        if (m_wndTabBar) {
-            const bool show = !m_wndTabBar->isVisible();
-            m_wndTabBar->setVisible(show);
-            if (show) theApp.m_flags1 |= F1_SHOWTABBAR;
-            else theApp.m_flags1 &= ~DWORD(F1_SHOWTABBAR);
-        }
+        theApp.OnViewTabbar();
     } else if (commandIdentifier == QLatin1String("ID_VIEW_STATUS_BAR")) {
         const bool show = !statusBar()->isVisible();
         statusBar()->setVisible(show);
         if (show) theApp.m_iShowBars |= SB_STATUSBAR;
         else theApp.m_iShowBars &= ~SB_STATUSBAR;
     } else if (commandIdentifier == QLatin1String("ID_VIEW_STATUSWINDOW")) {
-        ShowStatusWindow((theApp.m_flags0 & F0_SHOWSTATUSWINDOW) == 0);
+        theApp.OnViewStatuswindow();
     } else if (commandIdentifier == QLatin1String("ID_VIEW_LOGINNOTIFS")) {
         theApp.OnViewLoginNotifs();
     } else if (commandIdentifier == QLatin1String("ID_VIEW_AUTOMATIONS")) {
@@ -907,58 +1540,49 @@ void CMainFrame::executeCommand(const QString& commandIdentifier)
     } else if (commandIdentifier == QLatin1String("ID_WINDOW_TILE_AUTO")) {
         theApp.m_flags0 ^= F0_AUTOARRANGEWNDS;
         AutoArrangeWindows();
+    } else if (commandIdentifier == QLatin1String("ID_WINDOW_ARRANGE")) {
+        ArrangeIcons();
     } else if (commandIdentifier == QLatin1String("ID_ACTIONS_SAY")) {
-        if (GetSay()) GetSay()->OnActionsSay();
+        if (m_doc) m_doc->OnActionsSay();
     } else if (commandIdentifier == QLatin1String("ID_ACTIONS_THINK")) {
-        if (GetSay()) GetSay()->OnActionsThink();
+        if (m_doc) m_doc->OnActionsThink();
     } else if (commandIdentifier == QLatin1String("ID_ACTIONS_WHISPER")) {
-        if (GetSay()) GetSay()->OnActionsWhisper();
+        if (m_doc) m_doc->OnActionsWhisper();
     } else if (commandIdentifier == QLatin1String("ID_SEND_ACTION")) {
-        if (GetSay()) GetSay()->OnSendAction();
+        if (m_doc) m_doc->OnSendAction();
     } else if (commandIdentifier == QLatin1String("ID_SETFONT")) {
         if (m_doc) m_doc->OnSetfont();
     } else if (commandIdentifier == QLatin1String("ID_MEMBER_GETINFO")) {
-        if (m_doc && hasComicSelection(m_doc)) m_doc->OnMemberGetinfo();
+        if (m_doc) m_doc->OnMemberGetinfo();
+    } else if (commandIdentifier == QLatin1String("ID_MEMBER_GETCHAR")) {
+        if (m_doc) m_doc->OnGetComicCharacter();
     } else if (commandIdentifier == QLatin1String("ID_MEMBER_IGNORE")) {
-        if (m_doc && ignoreSelectionState(m_doc, nullptr))
-            m_doc->OnMemberIgnore();
+        if (m_doc) m_doc->OnMemberIgnore();
     } else if (commandIdentifier
                == QLatin1String("ID_ADDTONOTIFICATIONS")) {
-        if (m_doc && m_doc->GetSingleSelectedMember()
-            && theApp.m_iAutoPage == -1
-            && !m_doc->GetSingleSelectedMember()->GetFullName().isEmpty()) {
-            m_doc->OnAddToNotifs();
-        }
+        if (m_doc) m_doc->OnAddToNotifs();
     } else if (commandIdentifier == QLatin1String("ID_GETIDENTITY")) {
-        if (m_doc && m_doc->GetConnectionStatus() == CX_INCHANNEL)
-            m_doc->OnGetidentity();
+        if (m_doc) m_doc->OnGetidentity();
     } else if (commandIdentifier == QLatin1String("ID_GET_VERSION")) {
-        if (m_doc && m_doc->GetConnectionStatus() == CX_INCHANNEL)
-            m_doc->OnGetVersion();
+        if (m_doc) m_doc->OnGetVersion();
     } else if (commandIdentifier == QLatin1String("ID_PING_USER")) {
-        if (m_doc && m_doc->GetConnectionStatus() == CX_INCHANNEL)
-            m_doc->OnPingUser();
+        if (m_doc) m_doc->OnPingUser();
     } else if (commandIdentifier == QLatin1String("ID_GET_LOCALTIME")) {
-        if (m_doc && m_doc->GetConnectionStatus() == CX_INCHANNEL)
-            m_doc->OnGetLocaltime();
+        if (m_doc) m_doc->OnGetLocaltime();
     } else if (commandIdentifier == QLatin1String("ID_WHISPERBOX_MLIST")) {
-        CUserInfo* pui = m_doc ? m_doc->GetSingleSelectedMember() : nullptr;
-        if (pui && !pui->IsSelf()) m_doc->OnWhisperboxMlist();
+        if (m_doc) m_doc->OnWhisperboxMlist();
     } else if (commandIdentifier == QLatin1String("ID_SEND_EMAIL")) {
         if (m_doc) m_doc->OnSendEmail();
     } else if (commandIdentifier == QLatin1String("ID_VISIT_HOMEPAGE")) {
         if (m_doc) m_doc->OnVisitHomepage();
     } else if (commandIdentifier == QLatin1String("ID_ADMINISTRATOR_KICK")) {
-        CUserInfo* pui = m_doc ? m_doc->GetSingleSelectedMember() : nullptr;
-        if (pui && !pui->IsSelf()) m_doc->OnAdministratorKick();
+        if (m_doc) m_doc->OnAdministratorKick();
     } else if (commandIdentifier == QLatin1String("ID_ADMIN_BAN")) {
-        CUserInfo* pui = m_doc ? m_doc->GetSingleSelectedMember() : nullptr;
-        const int selected = m_doc && m_doc->m_memberList
-            ? m_doc->SelectedMemberCount() : 2;
-        if (m_doc && selected < 2 && (!pui || !pui->IsSelf()))
-            m_doc->OnAdminBan();
+        if (m_doc) m_doc->OnAdminBan();
+    } else if (commandIdentifier == QLatin1String("ID_ADMIN_BGRNDSYNC")) {
+        if (m_doc) m_doc->OnAdminBgrndsync();
     } else if (commandIdentifier == QLatin1String("ID_INVITE")) {
-        if (m_doc && bCanInvite()) m_doc->OnInvite();
+        if (m_doc) m_doc->OnInvite();
     } else if (commandIdentifier == QLatin1String("ID_MAKEADMIN")) {
         if (m_doc) m_doc->OnMakeadmin();
     } else if (commandIdentifier == QLatin1String("ID_MAKESPEAKER")) {
@@ -966,42 +1590,48 @@ void CMainFrame::executeCommand(const QString& commandIdentifier)
     } else if (commandIdentifier == QLatin1String("ID_MAKESPECTATOR")) {
         if (m_doc) m_doc->OnMakespectator();
     } else if (commandIdentifier == QLatin1String("ID_CHANNELPROPS")) {
-        if (m_doc && m_doc->GetConnectionStatus() == CX_INCHANNEL
-            && g_puiSelf && m_doc->m_puiSelf
-            && !m_doc->m_allChannelPuis.isEmpty()) {
-            m_doc->OnChannelprops();
-        }
+        if (m_doc) m_doc->OnChannelprops();
     } else if (commandIdentifier == QLatin1String("ID_SETCOLOR")) {
-        if (GetSay()) GetSay()->SwitchSelectionFormat(wForeground);
+        if (m_doc) m_doc->OnSetColor();
     } else if (commandIdentifier == QLatin1String("ID_SWITCHBOLD")) {
-        if (GetSay()) GetSay()->SwitchSelectionFormat(wBold);
+        if (m_doc) m_doc->OnSwitchBold();
     } else if (commandIdentifier == QLatin1String("ID_SWITCHITALIC")) {
-        if (GetSay()) GetSay()->SwitchSelectionFormat(wItalic);
+        if (m_doc) m_doc->OnSwitchItalic();
     } else if (commandIdentifier == QLatin1String("ID_SWITCHUNDERLINED")) {
-        if (GetSay()) GetSay()->SwitchSelectionFormat(wUnderline);
+        if (m_doc) m_doc->OnSwitchUnderlined();
     } else if (commandIdentifier == QLatin1String("ID_SWITCHFIXEDPITCH")) {
-        if (GetSay()) GetSay()->SwitchSelectionFormat(wFixedPitch);
+        if (m_doc) m_doc->OnSwitchFixedPitch();
     } else if (commandIdentifier == QLatin1String("ID_SWITCHSYMBOL")) {
-        if (GetSay()) GetSay()->SwitchSelectionFormat(wSymbol);
-    } else if (QTextEdit* edit = qobject_cast<QTextEdit*>(QApplication::focusWidget())) {
-        if (commandIdentifier == QLatin1String("ID_EDIT_UNDO")) edit->undo();
-        else if (commandIdentifier == QLatin1String("ID_EDIT_CUT")) edit->cut();
-        else if (commandIdentifier == QLatin1String("ID_EDIT_COPY")) edit->copy();
-        else if (commandIdentifier == QLatin1String("ID_EDIT_PASTE")) edit->paste();
-        else if (commandIdentifier == QLatin1String("ID_EDIT_DELETE")) {
-            QTextCursor cursor = edit->textCursor();
-            cursor.removeSelectedText();
-        } else if (commandIdentifier == QLatin1String("ID_EDIT_SELECTALL")) {
-            edit->selectAll();
-        }
+        if (m_doc) m_doc->OnSwitchSymbol();
+    } else if (commandIdentifier == QLatin1String("ID_APP_ABOUT")) {
+        theApp.OnAppAbout();
+    } else if (commandIdentifier == QLatin1String("ID_HELP_FREESTUFF")) {
+        theApp.OnHelpFreestuff();
+    } else if (commandIdentifier == QLatin1String("ID_HELP_PRODUCTNEWS")) {
+        theApp.OnHelpProductnews();
+    } else if (commandIdentifier == QLatin1String("ID_HELP_FAQ")) {
+        theApp.OnHelpFaq();
+    } else if (commandIdentifier == QLatin1String("ID_HELP_ONLINESUPPORT")) {
+        theApp.OnHelpOnlineSupport();
+    } else if (commandIdentifier == QLatin1String("ID_HELP_BESTOFWEB")) {
+        theApp.OnHelpBestofWeb();
+    } else if (commandIdentifier == QLatin1String("ID_HELP_SEARCHTHEWEB")) {
+        theApp.OnHelpSearchtheWeb();
+    } else if (commandIdentifier == QLatin1String("ID_HELP_MSHOMEPAGE")) {
+        theApp.OnHelpMsHomepage();
+    } else if (m_doc) {
+        if (commandIdentifier == QLatin1String("ID_EDIT_UNDO"))
+            m_doc->OnEditUndo();
+        else if (commandIdentifier == QLatin1String("ID_EDIT_CUT"))
+            m_doc->OnEditCut();
+        else if (commandIdentifier == QLatin1String("ID_EDIT_COPY"))
+            m_doc->OnEditCopy();
+        else if (commandIdentifier == QLatin1String("ID_EDIT_PASTE"))
+            m_doc->OnEditPaste();
+        else if (commandIdentifier == QLatin1String("ID_EDIT_DELETE"))
+            m_doc->OnEditDelete();
+        else if (commandIdentifier == QLatin1String("ID_EDIT_SELECTALL"))
+            m_doc->OnEditSelectAll();
     }
     updateCommandUi();
-}
-
-void CMainFrame::onConnect()
-{
-    CSetupDlg dlg(this);
-    if (dlg.exec() != QDialog::Accepted || !GetIrcProto()) return;
-    GetIrcProto()->ConnectToServer(dlg.server(), dlg.nickname(), dlg.realName(),
-                                   dlg.channel(), dlg.onConnectAction());
 }

@@ -8,6 +8,7 @@
 #include "backdrop.h"
 #include "chat.h"
 #include "chatdoc.h"
+#include "mainfrm.h"
 #include "memblst.h"
 #include "protsupp.h"
 #include "resource.h"
@@ -66,6 +67,33 @@ const QVector<QImage>& bodyCamIcons()
 RECT emptyRect()
 {
     return {0, 0, 0, 0};
+}
+
+void appendBodyContextItems(QMenu* menu,
+                            const QList<OriginalMenuItem>& items,
+                            CBodyCam* bodyCam)
+{
+    if (!menu) return;
+    for (const OriginalMenuItem& item : items) {
+        if (item.type == OriginalMenuItemType::Separator) {
+            menu->addSeparator();
+            continue;
+        }
+        if (item.type == OriginalMenuItemType::Popup) {
+            QMenu* submenu = menu->addMenu(item.text);
+            appendBodyContextItems(submenu, item.children, bodyCam);
+            continue;
+        }
+
+        QAction* action = menu->addAction(item.text);
+        action->setData(item.commandIdentifier);
+        if (item.commandIdentifier
+            == QLatin1String("ID_BODYCONTEXT_FREEZE")) {
+            action->setCheckable(true);
+            action->setChecked(bodyCam && bodyCam->m_avatar
+                               && bodyCam->m_avatar->m_freeze == AF_FROZEN);
+        }
+    }
 }
 }
 
@@ -481,19 +509,26 @@ void CBodyCam::contextMenuEvent(QContextMenuEvent* event)
         event->ignore();
         return;
     }
+
+    const QList<OriginalMenuItem> resourceItems =
+        originalMenuResource(QStringLiteral("IDR_BODYCONTEXT"));
+    const QList<OriginalMenuItem> items =
+        resourceItems.size() == 1
+            && resourceItems.first().type == OriginalMenuItemType::Popup
+        ? resourceItems.first().children : resourceItems;
+
     QMenu menu(this);
-    QAction* freeze = menu.addAction(
-        originalMenuItemText(QStringLiteral("ID_BODYCONTEXT_FREEZE")));
-    freeze->setCheckable(true);
-    freeze->setChecked(m_avatar && m_avatar->m_freeze == AF_FROZEN);
-    QAction* sendExpression = menu.addAction(
-        originalMenuItemText(QStringLiteral("ID_BODYCONTEXT_SENDEXPRESSION")));
+    appendBodyContextItems(&menu, items, this);
+    if (theApp.m_pMainWnd)
+        theApp.m_pMainWnd->ConfigureContextMenu(&menu);
     const QPoint popupPoint = event->reason() == QContextMenuEvent::Keyboard
         ? mapToGlobal(rect().center()) : event->globalPos();
     QAction* selected = menu.exec(popupPoint);
-    if (selected == freeze) {
+    const QString command = selected ? selected->data().toString() : QString();
+    if (command == QLatin1String("ID_BODYCONTEXT_FREEZE")) {
         OnBodycontextFreeze();
-    } else if (selected == sendExpression) {
+    } else if (command
+               == QLatin1String("ID_BODYCONTEXT_SENDEXPRESSION")) {
         OnBodycontextSendexpression();
     }
     event->accept();

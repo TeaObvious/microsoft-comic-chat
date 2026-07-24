@@ -9,6 +9,8 @@ class CIrcPrint;
 class CStatusView : public CTextView {
 public:
     explicit CStatusView(CChatDoc* document, QWidget* parent = nullptr);
+    BOOL OnUpdateViewComics(BOOL* checked = nullptr) const;
+    BOOL OnUpdateViewText(BOOL* checked = nullptr) const;
 
 protected:
     int LoadContextMenu(QMenu& menu) override;

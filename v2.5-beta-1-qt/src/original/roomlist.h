@@ -11,11 +11,11 @@
 #include <QTreeWidget>
 
 class QCheckBox;
+class QFocusEvent;
 class QLabel;
 class QLineEdit;
 class QPushButton;
 class QShowEvent;
-class QKeyEvent;
 class QWidget;
 
 class CRoom {
@@ -62,6 +62,9 @@ public:
     explicit CRoomListCtrl(CRoomList* parent);
 
     CRoom* GetSelectedRoom() const;
+
+protected:
+    void focusInEvent(QFocusEvent* event) override;
 
 private:
     CRoomList* m_roomList = nullptr;
@@ -116,7 +119,7 @@ public:
 
 protected:
     void showEvent(QShowEvent* event) override;
-    void keyPressEvent(QKeyEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     void initializeDialog();
@@ -125,4 +128,3 @@ private:
     bool m_bInitialized = false;
     bool m_loadingControls = false;
 };
-

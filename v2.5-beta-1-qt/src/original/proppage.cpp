@@ -7,12 +7,14 @@
 #include "bodycam.h"
 #include "chat.h"
 #include "chatdoc.h"
+#include "colordlg.h"
 #include "defines.h"
 #include "histent.h"
 #include "ircproto.h"
 #include "originalassets.h"
 #include "pageview.h"
 #include "panel.h"
+#include "protsupp.h"
 #include "saywnd.h"
 #include "setupdlg.h"
 #include "textview.h"
@@ -20,22 +22,25 @@
 #include "whisprbx.h"
 
 #include <QApplication>
+#include <QBoxLayout>
 #include <QDialogButtonBox>
 #include <QCheckBox>
 #include <QFile>
 #include <QFileInfo>
-#include <QFormLayout>
 #include <QFontDialog>
 #include <QFontInfo>
 #include <QFontMetrics>
 #include <QFrame>
-#include <QGridLayout>
 #include <QGroupBox>
 #include <QIcon>
+#include <QItemSelectionModel>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QMouseEvent>
+#include <QPalette>
 #include <QPixmap>
 #include <QPushButton>
 #include <QRadioButton>
@@ -45,6 +50,7 @@
 #include <QSpinBox>
 #include <QTabWidget>
 #include <QTextEdit>
+#include <QTextCursor>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -53,6 +59,122 @@
 
 namespace {
 CPersonalPage* g_personalPage = nullptr;
+constexpr int kSourceMaxPath = 260;
+
+class CBackgroundListWidget final : public QListWidget {
+public:
+    explicit CBackgroundListWidget(QWidget* parent)
+        : QListWidget(parent)
+    {
+    }
+
+    void preserveNoCurrentItem(bool preserve)
+    {
+        m_preserveNoCurrentItem = preserve;
+    }
+
+protected:
+    void focusInEvent(QFocusEvent* event) override
+    {
+        if (!m_preserveNoCurrentItem) {
+            QListWidget::focusInEvent(event);
+            return;
+        }
+        const QSignalBlocker blocker(this);
+        QListWidget::focusInEvent(event);
+        clearSelection();
+        selectionModel()->clearCurrentIndex();
+    }
+
+    void keyPressEvent(QKeyEvent* event) override
+    {
+        m_preserveNoCurrentItem = false;
+        QListWidget::keyPressEvent(event);
+    }
+
+    void mousePressEvent(QMouseEvent* event) override
+    {
+        m_preserveNoCurrentItem = false;
+        QListWidget::mousePressEvent(event);
+    }
+
+private:
+    bool m_preserveNoCurrentItem = false;
+};
+
+class DialogUnitMapper {
+public:
+    explicit DialogUnitMapper(const QFont& font)
+    {
+        const QFontMetrics metrics(font);
+        const QString alphabet = QStringLiteral(
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
+        m_baseX = qMax(1,
+            (metrics.horizontalAdvance(alphabet) / 26 + 1) / 2);
+        m_baseY = qMax(1, metrics.height());
+    }
+
+    int x(int dlu) const { return (dlu * m_baseX + 2) / 4; }
+    int y(int dlu) const { return (dlu * m_baseY + 4) / 8; }
+    QRect rect(const OriginalDialogControl& control) const
+    {
+        return {x(control.x), y(control.y),
+                x(control.width), y(control.height)};
+    }
+
+private:
+    int m_baseX = 1;
+    int m_baseY = 1;
+};
+
+QFont propertyPageFont(const OriginalDialogResource& dialog)
+{
+    QFont font(dialog.fontFamily);
+    if (dialog.fontPointSize > 0) font.setPointSize(dialog.fontPointSize);
+    return font;
+}
+
+const OriginalDialogControl* propertyPageControl(
+    const OriginalDialogResource& dialog, const QString& identifier,
+    int occurrence = 0)
+{
+    for (const OriginalDialogControl& control : dialog.controls) {
+        if (control.identifier != identifier) continue;
+        if (occurrence-- == 0) return &control;
+    }
+    return nullptr;
+}
+
+void placePropertyPageControl(
+    QWidget* widget, const OriginalDialogResource& dialog,
+    const DialogUnitMapper& mapper, const QString& identifier,
+    int occurrence = 0)
+{
+    if (!widget) return;
+    widget->setObjectName(identifier);
+    if (const OriginalDialogControl* control = propertyPageControl(
+            dialog, identifier, occurrence)) {
+        widget->setGeometry(mapper.rect(*control));
+        widget->setVisible(control->visible);
+    }
+}
+
+QLabel* createPropertyPageLabel(
+    QWidget* parent, const QString& resource,
+    const OriginalDialogResource& dialog, const DialogUnitMapper& mapper,
+    int occurrence, QWidget* buddy = nullptr)
+{
+    auto* label = new QLabel(originalDialogControlText(
+        resource, QStringLiteral("IDC_STATIC"), occurrence), parent);
+    if (const OriginalDialogControl* control = propertyPageControl(
+            dialog, QStringLiteral("IDC_STATIC"), occurrence)) {
+        label->setWordWrap(control->height > 10);
+    }
+    if (buddy) label->setBuddy(buddy);
+    placePropertyPageControl(label, dialog, mapper,
+                             QStringLiteral("IDC_STATIC"), occurrence);
+    return label;
+}
 
 QString decodedCopyright(const char* copyrightText, const QString& defaultResource)
 {
@@ -93,52 +215,292 @@ void configureOriginalEdit(QLineEdit* edit, int maximumBytes)
     // the identical ASCII limit while still allowing Qt input methods.
     edit->setMaxLength(maximumBytes);
 }
+
+int sourceByteLength(const QString& value)
+{
+    return value.toLocal8Bit().size();
 }
+
+int sourceCharacterLimit(const QString& value, int maximumBytes)
+{
+    int accepted = 0;
+    while (accepted < value.size()
+           && sourceByteLength(value.left(accepted + 1)) <= maximumBytes) {
+        ++accepted;
+    }
+    return accepted;
+}
+
+QString removeDuplicatePathEntries(const QString& path)
+{
+    QStringList entries;
+    bool duplicate = false;
+    qsizetype position = 0;
+    while (position < path.size()) {
+        while (position < path.size() && path.at(position).isSpace())
+            ++position;
+        if (position >= path.size()) break;
+
+        QString entry;
+        if (path.at(position) == QLatin1Char('"')) {
+            // The original quoted branch searches from the opening quote
+            // itself, so it does not establish a usable quoted-path
+            // de-duplication rule. Preserve the complete value instead of
+            // inventing repaired quote semantics.
+            return path;
+        } else {
+            const qsizetype separator = path.indexOf(
+                QLatin1Char(';'), position);
+            const qsizetype end = separator < 0 ? path.size() : separator;
+            entry = path.mid(position, end - position).trimmed();
+            position = separator < 0 ? path.size() : separator + 1;
+        }
+
+        bool alreadyPresent = false;
+        for (const QString& existing : entries) {
+            if (existing.compare(entry, Qt::CaseInsensitive) == 0) {
+                alreadyPresent = true;
+                duplicate = true;
+                break;
+            }
+        }
+        if (!alreadyPresent) entries.append(entry);
+    }
+    return duplicate ? entries.join(QLatin1Char(';')) : path;
+}
+}
+
+// -----------------------------------------------------------------------------
+// CSettingsPage
+
+CSettingsPage::CSettingsPage(QWidget* parent)
+    : QWidget(parent)
+{
+    const QString resource = QStringLiteral("IDD_SETTINGSPAGE");
+    const OriginalDialogResource dialog = originalDialogResource(resource);
+    const QFont font = propertyPageFont(dialog);
+    const DialogUnitMapper mapper(font);
+    setFont(font);
+    setObjectName(resource);
+    setWindowTitle(dialog.caption);
+    setFixedSize(mapper.x(dialog.width), mapper.y(dialog.height));
+
+    auto* connection = new QGroupBox(originalDialogControlText(
+        resource, QStringLiteral("IDC_GROUP0")), this);
+    placePropertyPageControl(connection, dialog, mapper,
+                             QStringLiteral("IDC_GROUP0"));
+    createPropertyPageLabel(this, resource, dialog, mapper, 0);
+
+    const auto checkBox = [&](const QString& identifier) {
+        auto* box = new QCheckBox(originalDialogControlText(
+            resource, identifier), this);
+        placePropertyPageControl(box, dialog, mapper, identifier);
+        return box;
+    };
+
+    m_comicsData = checkBox(QStringLiteral("IDC_COMICSDATA"));
+
+    auto* ratingsGroup = new QGroupBox(originalDialogControlText(
+        resource, QStringLiteral("IDC_ADVANCED_RATINGS_GROUPBOX")), this);
+    placePropertyPageControl(ratingsGroup, dialog, mapper,
+                             QStringLiteral("IDC_ADVANCED_RATINGS_GROUPBOX"));
+    auto* ratingsIcon = new QLabel(this);
+    placePropertyPageControl(ratingsIcon, dialog, mapper,
+                             QStringLiteral("IDC_RATINGS_ICON"));
+    const QString ratingsIconPath = originalFileResourcePath(
+        QStringLiteral("IDI_RATINGS"), QStringLiteral("ICON"));
+    if (!ratingsIconPath.isEmpty()) {
+        ratingsIcon->setPixmap(QIcon(ratingsIconPath).pixmap(
+            ratingsIcon->size()));
+    }
+    auto* ratingsText = new QLabel(originalDialogControlText(
+        resource, QStringLiteral("IDC_RATINGS_TEXT")), this);
+    ratingsText->setWordWrap(true);
+    placePropertyPageControl(ratingsText, dialog, mapper,
+                             QStringLiteral("IDC_RATINGS_TEXT"));
+    auto* ratingsOn = new QPushButton(originalDialogControlText(
+        resource, QStringLiteral("IDC_RATINGS_TURN_ON")), this);
+    placePropertyPageControl(ratingsOn, dialog, mapper,
+                             QStringLiteral("IDC_RATINGS_TURN_ON"));
+    auto* ratingsAdvanced = new QPushButton(originalDialogControlText(
+        resource, QStringLiteral("IDC_ADVANCED_RATINGS_BUTTON")), this);
+    placePropertyPageControl(ratingsAdvanced, dialog, mapper,
+                             QStringLiteral("IDC_ADVANCED_RATINGS_BUTTON"));
+
+    // This is the source branch taken when MSRATING.DLL cannot be loaded.
+    ratingsGroup->setEnabled(false);
+    ratingsIcon->setEnabled(false);
+    ratingsText->setEnabled(false);
+    ratingsOn->setEnabled(false);
+    ratingsAdvanced->setEnabled(false);
+
+    m_acceptWhispers = checkBox(QStringLiteral("IDC_ACCEPTWHISPERS"));
+    m_playSounds = checkBox(QStringLiteral("IDC_PLAYSOUNDS"));
+    m_showArrivals = checkBox(QStringLiteral("IDC_SHOWARRIVALS"));
+    m_showIdentity = checkBox(QStringLiteral("IDC_SHOWIDENTITY"));
+    m_visible = checkBox(QStringLiteral("IDC_INVISIBLE"));
+    m_allowInvites = checkBox(QStringLiteral("IDC_ALLOWINVITES"));
+    m_allowFileTx = checkBox(QStringLiteral("IDC_ALLOW_FILETX"));
+    m_acceptNmCalls = checkBox(QStringLiteral("IDC_NETMEETING_AUTOSTART"));
+    m_save = checkBox(QStringLiteral("IDC_SAVE"));
+
+    createPropertyPageLabel(this, resource, dialog, mapper, 1);
+    m_soundPath = new QLineEdit(this);
+    placePropertyPageControl(m_soundPath, dialog, mapper,
+                             QStringLiteral("IDC_SOUNDPATH"));
+    m_soundPath->setMaxLength(kSourceMaxPath);
+    auto* browseSoundPath = new QPushButton(originalDialogControlText(
+        resource, QStringLiteral("IDC_SOUNDPATH_BROWSE")), this);
+    placePropertyPageControl(browseSoundPath, dialog, mapper,
+                             QStringLiteral("IDC_SOUNDPATH_BROWSE"));
+    // CBrowseFolderDialogEx and the MCI sound package are deferred. Do not
+    // replace their source-defined workflow with a native Qt picker.
+    browseSoundPath->setEnabled(false);
+
+    m_comicsData->setChecked(!GetSendComicsData());
+    m_acceptWhispers->setChecked(theApp.m_bAcceptWhispers);
+    m_playSounds->setChecked(theApp.m_bPlaySounds);
+    m_showArrivals->setChecked(theApp.m_bShowArrivals);
+    m_showIdentity->setChecked(theApp.m_bShowIdentity);
+    m_visible->setChecked((theApp.m_flags1 & F1_USERVISIBLE) != 0);
+    m_allowInvites->setChecked(theApp.m_bAllowInvites);
+    m_allowFileTx->setChecked(theApp.m_bAllowFileTX);
+    m_acceptNmCalls->setChecked(theApp.m_bAcceptNMCalls);
+    m_save->setChecked(theApp.m_bPrompt);
+    m_soundPath->setText(theApp.m_soundPath);
+    if (GetChatDoc() && theApp.m_bEmbedded) m_save->setEnabled(false);
+}
+
+bool CSettingsPage::validate()
+{
+    if (sourceByteLength(m_soundPath->text()) <= kSourceMaxPath) return true;
+    m_soundPath->setFocus();
+    return false;
+}
+
+void CSettingsPage::apply()
+{
+    const bool sendComicsData = !m_comicsData->isChecked();
+    if (sendComicsData != GetSendComicsData()) ToggleSendComicsData();
+
+    const bool save = m_save->isChecked();
+    theApp.m_bPrompt = save;
+    for (CChatDoc* document : g_docs) {
+        if (document) document->SetModifiedFlag(save);
+    }
+
+    theApp.m_bAcceptWhispers = m_acceptWhispers->isChecked();
+    theApp.m_bAllowInvites = m_allowInvites->isChecked();
+    theApp.m_bAllowFileTX = m_allowFileTx->isChecked();
+    theApp.m_bShowArrivals = m_showArrivals->isChecked();
+    theApp.m_bPlaySounds = m_playSounds->isChecked();
+    theApp.m_bAcceptNMCalls = m_acceptNmCalls->isChecked();
+    theApp.m_bShowIdentity = m_showIdentity->isChecked();
+
+    const bool visible = m_visible->isChecked();
+    if (((theApp.m_flags1 & F1_USERVISIBLE) != 0) != visible) {
+        if (auto* protocol = dynamic_cast<CIrcProto*>(GetDefaultProto()))
+            protocol->SetVisibility(visible);
+    }
+
+    theApp.m_soundPath = removeDuplicatePathEntries(m_soundPath->text());
+}
+
+// -----------------------------------------------------------------------------
+// CPersonalPage
 
 CPersonalPage::CPersonalPage(QWidget* parent)
     : QWidget(parent)
+    , m_rtfProfile(this)
     , m_realName(new QLineEdit(this))
     , m_nickname(new QLineEdit(this))
     , m_email(new QLineEdit(this))
     , m_homePage(new QLineEdit(this))
-    , m_profile(new QTextEdit(this))
 {
-    g_personalPage = this;
+    const QString resource = QStringLiteral("IDD_PERSONALPAGE_IRC");
+    const OriginalDialogResource dialog = originalDialogResource(resource);
+    const QFont font = propertyPageFont(dialog);
+    const DialogUnitMapper mapper(font);
+    setFont(font);
+    setObjectName(resource);
+    setWindowTitle(dialog.caption);
+    setFixedSize(mapper.x(dialog.width), mapper.y(dialog.height));
+
     m_realName->setText(QString::fromUtf8(GetMyRealName()));
     m_nickname->setText(QString::fromUtf8(GetMyName()));
     m_email->setText(QString::fromUtf8(GetMyEmail()));
     m_homePage->setText(QString::fromUtf8(GetMyHomePage()));
-    m_profile->setPlainText(theApp.m_myProfile);
 
     configureOriginalEdit(m_nickname, MAX_NICKINPUT);
     configureOriginalEdit(m_realName, MAX_REALNAMEINPUT);
     configureOriginalEdit(m_email, MAX_EMAILINPUT);
     configureOriginalEdit(m_homePage, MAX_HOMEPAGEINPUT);
-    m_profile->document()->setMaximumBlockCount(0);
 
     m_nickname->setValidator(new QRegularExpressionValidator(
         QRegularExpression(QStringLiteral("[^,]*")), m_nickname));
     m_email->setValidator(new QRegularExpressionValidator(
-        QRegularExpression(QStringLiteral("[^ ]*")), m_email));
+        QRegularExpression(QStringLiteral("\\S*")), m_email));
     m_homePage->setValidator(new QRegularExpressionValidator(
-        QRegularExpression(QStringLiteral("[^ ]*")), m_homePage));
+        QRegularExpression(QStringLiteral("\\S*")), m_homePage));
 
-    auto* layout = new QFormLayout(this);
-    layout->addRow(originalDialogControlText(
-                       QStringLiteral("IDD_PERSONALPAGE_IRC"),
-                       QStringLiteral("IDC_STATIC"), 0), m_realName);
-    layout->addRow(originalDialogControlText(
-                       QStringLiteral("IDD_PERSONALPAGE_IRC"),
-                       QStringLiteral("IDC_STATIC"), 1), m_nickname);
-    layout->addRow(originalDialogControlText(
-                       QStringLiteral("IDD_PERSONALPAGE_IRC"),
-                       QStringLiteral("IDC_STATIC"), 2), m_email);
-    layout->addRow(originalDialogControlText(
-                       QStringLiteral("IDD_PERSONALPAGE_IRC"),
-                       QStringLiteral("IDC_STATIC"), 3), m_homePage);
-    layout->addRow(originalDialogControlText(
-                       QStringLiteral("IDD_PERSONALPAGE_IRC"),
-                       QStringLiteral("IDC_STATIC"), 4), m_profile);
+    placePropertyPageControl(m_realName, dialog, mapper,
+                             QStringLiteral("IDC_REALNAME"));
+    placePropertyPageControl(m_nickname, dialog, mapper,
+                             QStringLiteral("IDC_NICKNAME"));
+    placePropertyPageControl(m_email, dialog, mapper,
+                             QStringLiteral("IDC_EMAIL"));
+    placePropertyPageControl(m_homePage, dialog, mapper,
+                             QStringLiteral("IDC_HOMEPAGE"));
+    placePropertyPageControl(&m_rtfProfile, dialog, mapper,
+                             QStringLiteral("IDC_PROFILE_RICHEDIT"));
+    createPropertyPageLabel(this, resource, dialog, mapper, 0, m_realName);
+    createPropertyPageLabel(this, resource, dialog, mapper, 1, m_nickname);
+    createPropertyPageLabel(this, resource, dialog, mapper, 2, m_email);
+    createPropertyPageLabel(this, resource, dialog, mapper, 3, m_homePage);
+    createPropertyPageLabel(this, resource, dialog, mapper, 4, &m_rtfProfile);
+
+    for (const QString& identifier : {
+             QStringLiteral("IDC_ACCEPTWHISPERS"),
+             QStringLiteral("IDC_SHOWARRIVALS"),
+             QStringLiteral("IDC_SAVE")}) {
+        auto* unused = new QCheckBox(originalDialogControlText(
+            resource, identifier), this);
+        placePropertyPageControl(unused, dialog, mapper, identifier);
+    }
+
+    const QColor profileColor = palette().color(QPalette::Text);
+    m_rtfProfile.m_crTextColor = RGB(
+        profileColor.red(), profileColor.green(), profileColor.blue());
+    m_rtfProfile.DefineDefaultCharFormat();
+    m_rtfProfile.UseDefaultCharFormat();
+    if (theApp.m_myProfile.isEmpty()) {
+        m_rtfProfile.m_strText = originalResourceString(
+            QStringLiteral("ID_DEFAULT_PROFILE"));
+    } else {
+        QByteArray controlFull = theApp.m_myProfile.toUtf8();
+        m_rtfProfile.m_prgdwFormatting = new CDWordArray;
+        char* controlLess = SzControlLess(
+            controlFull.data(), m_rtfProfile.m_prgdwFormatting);
+        m_rtfProfile.m_strText = QString::fromUtf8(controlLess);
+    }
+    m_rtfProfile.bSetWindowFormattedText(
+        m_rtfProfile.m_strText, m_rtfProfile.m_prgdwFormatting);
+
+    connect(&m_rtfProfile, &QTextEdit::textChanged, this, [this] {
+        const QString text = m_rtfProfile.toPlainText();
+        if (sourceByteLength(text) <= MAX_INPUTLEN) return;
+        const int keep = sourceCharacterLimit(text, MAX_INPUTLEN);
+        const QSignalBlocker blocker(&m_rtfProfile);
+        QTextCursor cursor(m_rtfProfile.document());
+        cursor.setPosition(keep);
+        cursor.movePosition(QTextCursor::End, QTextCursor::KeepAnchor);
+        cursor.removeSelectedText();
+    });
+
+    setTabOrder(m_realName, m_nickname);
+    setTabOrder(m_nickname, m_email);
+    setTabOrder(m_email, m_homePage);
+    setTabOrder(m_homePage, &m_rtfProfile);
 }
 
 CPersonalPage::~CPersonalPage()
@@ -149,6 +511,22 @@ CPersonalPage::~CPersonalPage()
 CPersonalPage* GetPersonalPage()
 {
     return g_personalPage;
+}
+
+void CPersonalPage::showEvent(QShowEvent* event)
+{
+    g_personalPage = this;
+    const CRoomInfo* protocol = GetDefaultProto();
+    const int status = protocol
+        ? protocol->GetConnectionStatus() : CX_DISCONNECTED;
+    m_realName->setEnabled(status == CX_DISCONNECTED);
+    QWidget::showEvent(event);
+}
+
+void CPersonalPage::hideEvent(QHideEvent* event)
+{
+    if (g_personalPage == this) g_personalPage = nullptr;
+    QWidget::hideEvent(event);
 }
 
 QString CPersonalPage::nickname() const
@@ -174,10 +552,20 @@ bool CPersonalPage::validate()
         m_nickname->setFocus();
         return false;
     }
-    if (nick.toLocal8Bit().size() > MAX_NICKINPUT
-        || m_realName->text().toLocal8Bit().size() > MAX_REALNAMEINPUT
-        || m_email->text().toLocal8Bit().size() > MAX_EMAILINPUT
-        || m_homePage->text().toLocal8Bit().size() > MAX_HOMEPAGEINPUT) {
+    const auto validateBytes = [](QLineEdit* edit, int maximum) {
+        if (sourceByteLength(edit->text()) <= maximum) return true;
+        edit->setFocus();
+        edit->selectAll();
+        return false;
+    };
+    if (sourceByteLength(nick) > MAX_NICKINPUT) {
+        m_nickname->setFocus();
+        m_nickname->selectAll();
+        return false;
+    }
+    if (!validateBytes(m_realName, MAX_REALNAMEINPUT)
+        || !validateBytes(m_email, MAX_EMAILINPUT)
+        || !validateBytes(m_homePage, MAX_HOMEPAGEINPUT)) {
         return false;
     }
     return true;
@@ -185,20 +573,29 @@ bool CPersonalPage::validate()
 
 void CPersonalPage::apply()
 {
+    m_rtfProfile.m_strText = m_rtfProfile.toPlainText();
+    FreeAndNullFormatting(&m_rtfProfile.m_prgdwFormatting);
+    m_rtfProfile.m_prgdwFormatting = PRGDWGetFormatting(
+        &m_rtfProfile, m_rtfProfile.m_pFont,
+        m_rtfProfile.m_crTextColor);
+    const QByteArray plain = m_rtfProfile.m_strText.toUtf8();
+    char* controlFull = m_rtfProfile.m_prgdwFormatting
+        ? SzControlFull(plain.constData(),
+                        m_rtfProfile.m_prgdwFormatting)
+        : nullptr;
+    theApp.m_myProfile = controlFull
+        ? QString::fromUtf8(controlFull) : m_rtfProfile.m_strText;
+    delete[] controlFull;
+
     const QString newNickname = nickname();
-    CChatDoc* document = GetChatDoc();
-    if (newNickname.compare(QString::fromUtf8(GetMyName()), Qt::CaseSensitive) != 0) {
-        if (document && document->m_proto
-            && document->GetConnectionStatus() != CX_DISCONNECTED) {
-            document->m_proto->ChatChangeNick(newNickname);
-        } else {
-            SetMyName(newNickname);
-        }
+    if (newNickname.compare(
+            QString::fromUtf8(GetMyName()), Qt::CaseInsensitive) != 0) {
+        if (auto* protocol = dynamic_cast<CIrcProto*>(GetDefaultProto()))
+            protocol->ChatSetNick(newNickname);
     }
     SetMyRealName(m_realName->text());
     SetMyEmail(m_email->text());
     SetMyHomePage(m_homePage->text());
-    theApp.m_myProfile = m_profile->toPlainText().left(MAX_INPUTLEN);
 }
 
 CCharacterPage::CCharacterPage(QWidget* parent)
@@ -207,52 +604,41 @@ CCharacterPage::CCharacterPage(QWidget* parent)
     , m_bodyCam(new CBodyCam(this))
     , m_copyright(new QTextEdit(this))
 {
+    const QString resource = QStringLiteral("IDD_CHARACTERPAGE");
+    const OriginalDialogResource dialog = originalDialogResource(resource);
+    const QFont font = propertyPageFont(dialog);
+    const DialogUnitMapper mapper(font);
+    setFont(font);
+    setObjectName(resource);
+    setWindowTitle(dialog.caption);
+    setFixedSize(mapper.x(dialog.width), mapper.y(dialog.height));
+
+    createPropertyPageLabel(this, resource, dialog, mapper, 0, m_avatarList);
+    createPropertyPageLabel(this, resource, dialog, mapper, 1, m_bodyCam);
+    placePropertyPageControl(m_avatarList, dialog, mapper,
+                             QStringLiteral("IDC_AVLIST"));
+    auto* previewPosition = new QWidget(this);
+    placePropertyPageControl(previewPosition, dialog, mapper,
+                             QStringLiteral("IDC_CHARACTER_PREVIEW"));
+    m_bodyCam->setObjectName(QStringLiteral("5"));
+    m_bodyCam->setGeometry(previewPosition->geometry());
+    m_bodyCam->setVisible(true);
+    placePropertyPageControl(m_copyright, dialog, mapper,
+                             QStringLiteral("IDC_AVATAR_COPYRIGHT"));
+
     m_avatarList->setSortingEnabled(true);
-    for (const QString& name : GetAllAvatarNames()) {
-        auto* item = new QListWidgetItem(displayArtName(name), m_avatarList);
-        item->setData(Qt::UserRole, name);
-    }
 
     m_bodyCam->EnableDoubleClick(FALSE);
     m_bodyCam->m_forcedDelete = FALSE;
-    m_bodyCam->setMinimumSize(141, 270);
     m_copyright->setReadOnly(true);
-    m_copyright->setMaximumHeight(48);
 
-    QString selected = QString::fromUtf8(GetMyCharacter());
+    m_initialSelection = QString::fromUtf8(GetMyCharacter());
     if (GetChatDoc() && GetChatDoc()->m_bComicView && MyAvatar()) {
-        selected = QString::fromUtf8(MyAvatar()->OriginalName());
+        m_initialSelection = QString::fromUtf8(MyAvatar()->OriginalName());
     }
-    CAvatarX* avatar = GetAvatar2(selected);
-    if (!avatar) avatar = GetAvatar3(QStringLiteral("X"));
-    if (avatar) {
-        selected = QString::fromUtf8(avatar->OriginalName());
-        m_selectedName = selected;
-        m_bodyCam->m_avatar = avatar;
-    }
-    for (int index = 0; index < m_avatarList->count(); ++index) {
-        QListWidgetItem* item = m_avatarList->item(index);
-        if (item->data(Qt::UserRole).toString().compare(selected, Qt::CaseInsensitive) == 0) {
-            m_avatarList->setCurrentItem(item);
-            break;
-        }
-    }
-
-    auto* grid = new QGridLayout(this);
-    grid->addWidget(new QLabel(originalDialogControlText(
-        QStringLiteral("IDD_CHARACTERPAGE"), QStringLiteral("IDC_STATIC"), 0),
-        this), 0, 0);
-    grid->addWidget(new QLabel(originalDialogControlText(
-        QStringLiteral("IDD_CHARACTERPAGE"), QStringLiteral("IDC_STATIC"), 1),
-        this), 0, 1);
-    grid->addWidget(m_avatarList, 1, 0);
-    grid->addWidget(m_bodyCam, 1, 1);
-    grid->addWidget(m_copyright, 2, 0, 1, 2);
 
     connect(m_avatarList, &QListWidget::currentItemChanged, this,
             [this](QListWidgetItem*, QListWidgetItem*) { selectAvatar(); });
-    m_bodyCam->RefreshBody();
-    updateCopyright(avatar);
 }
 
 CCharacterPage::~CCharacterPage()
@@ -263,13 +649,48 @@ CCharacterPage::~CCharacterPage()
 void CCharacterPage::showEvent(QShowEvent* event)
 {
     QWidget::showEvent(event);
+    initializePage();
     SetCharSelBodyCam(m_bodyCam);
 }
 
 void CCharacterPage::hideEvent(QHideEvent* event)
 {
     if (GetCharSelBodyCam() == m_bodyCam) SetCharSelBodyCam(nullptr);
+    {
+        const QSignalBlocker blocker(m_avatarList);
+        m_avatarList->clear();
+    }
     QWidget::hideEvent(event);
+}
+
+void CCharacterPage::initializePage()
+{
+    const QSignalBlocker blocker(m_avatarList);
+    m_avatarList->clear();
+    for (const QString& name : GetAllAvatarNames()) {
+        auto* item = new QListWidgetItem(displayArtName(name), m_avatarList);
+        item->setData(Qt::UserRole, name);
+    }
+
+    QString selected = m_selectedName.isEmpty()
+        ? m_initialSelection : m_selectedName;
+    CAvatarX* avatar = GetAvatar2(selected);
+    if (!avatar) avatar = GetAvatar3(QStringLiteral("X"));
+    if (avatar) {
+        selected = QString::fromUtf8(avatar->OriginalName());
+        m_selectedName = selected;
+        m_bodyCam->m_avatar = avatar;
+    }
+    for (int index = 0; index < m_avatarList->count(); ++index) {
+        QListWidgetItem* item = m_avatarList->item(index);
+        if (item->data(Qt::UserRole).toString().compare(
+                selected, Qt::CaseInsensitive) == 0) {
+            m_avatarList->setCurrentItem(item);
+            break;
+        }
+    }
+    m_bodyCam->RefreshBody();
+    updateCopyright(avatar);
 }
 
 void CCharacterPage::selectAvatar()
@@ -342,49 +763,107 @@ void CCharacterPage::apply()
 
 CBackgroundPage::CBackgroundPage(QWidget* parent)
     : QWidget(parent)
-    , m_backgroundList(new QListWidget(this))
+    , m_backgroundList(new CBackgroundListWidget(this))
     , m_preview(new QLabel(this))
     , m_copyright(new QTextEdit(this))
 {
-    m_backgroundList->setSortingEnabled(true);
-    for (const QString& fileName : OriginalBackdropNames()) {
-        auto* item = new QListWidgetItem(displayArtName(QFileInfo(fileName).completeBaseName()),
-                                         m_backgroundList);
-        item->setData(Qt::UserRole, fileName);
+    const QString resource = QStringLiteral("IDD_BACKGROUNDPAGE");
+    const OriginalDialogResource dialog = originalDialogResource(resource);
+    const QFont font = propertyPageFont(dialog);
+    const DialogUnitMapper mapper(font);
+    setFont(font);
+    setObjectName(resource);
+    setWindowTitle(dialog.caption);
+    setFixedSize(mapper.x(dialog.width), mapper.y(dialog.height));
+
+    createPropertyPageLabel(
+        this, resource, dialog, mapper, 0, m_backgroundList);
+    createPropertyPageLabel(this, resource, dialog, mapper, 1, m_preview);
+    placePropertyPageControl(m_backgroundList, dialog, mapper,
+                             QStringLiteral("IDC_BACKLIST"));
+
+    for (const QString& identifier : {
+             QStringLiteral("IDC_BACKPREV"),
+             QStringLiteral("IDC_PREVX"),
+             QStringLiteral("IDC_PREVY")}) {
+        auto* marker = new QLabel(originalDialogControlText(
+            resource, identifier), this);
+        placePropertyPageControl(marker, dialog, mapper, identifier);
     }
+    const OriginalDialogControl* previewStart = propertyPageControl(
+        dialog, QStringLiteral("IDC_BACKPREV"));
+    const OriginalDialogControl* previewRight = propertyPageControl(
+        dialog, QStringLiteral("IDC_PREVX"));
+    const OriginalDialogControl* previewBottom = propertyPageControl(
+        dialog, QStringLiteral("IDC_PREVY"));
+    if (previewStart && previewRight && previewBottom) {
+        const int left = mapper.x(previewStart->x);
+        const int top = mapper.y(previewStart->y);
+        const int right = mapper.x(
+            previewRight->x + previewRight->width);
+        const int bottom = mapper.y(
+            previewBottom->y + previewBottom->height);
+        m_preview->setGeometry(left, top, right - left, bottom - top);
+    }
+    m_preview->setObjectName(QStringLiteral("BACKGROUND_PREVIEW"));
+    placePropertyPageControl(m_copyright, dialog, mapper,
+                             QStringLiteral("IDC_BACKGROUND_COPYRIGHT"));
+
+    m_backgroundList->setSortingEnabled(true);
     m_preview->setFrameStyle(QFrame::Box | QFrame::Plain);
     m_preview->setAlignment(Qt::AlignCenter);
-    m_preview->setMinimumSize(220, 255);
     m_copyright->setReadOnly(true);
-    m_copyright->setMaximumHeight(48);
 
-    const QString current = QString::fromLocal8Bit(GetCurrentBackDropName());
-    for (int index = 0; index < m_backgroundList->count(); ++index) {
-        QListWidgetItem* item = m_backgroundList->item(index);
-        const QString fileName = item->data(Qt::UserRole).toString();
-        if (fileName.compare(current, Qt::CaseInsensitive) == 0
-            || QFileInfo(fileName).completeBaseName().compare(current, Qt::CaseInsensitive) == 0) {
-            m_backgroundList->setCurrentItem(item);
-            break;
-        }
-    }
-    if (!m_backgroundList->currentItem() && m_backgroundList->count() > 0) {
-        m_backgroundList->setCurrentRow(0);
-    }
-
-    auto* grid = new QGridLayout(this);
-    grid->addWidget(new QLabel(originalDialogControlText(
-        QStringLiteral("IDD_BACKGROUNDPAGE"), QStringLiteral("IDC_STATIC"), 0),
-        this), 0, 0);
-    grid->addWidget(new QLabel(originalDialogControlText(
-        QStringLiteral("IDD_BACKGROUNDPAGE"), QStringLiteral("IDC_STATIC"), 1),
-        this), 0, 1);
-    grid->addWidget(m_backgroundList, 1, 0);
-    grid->addWidget(m_preview, 1, 1);
-    grid->addWidget(m_copyright, 2, 0, 1, 2);
+    m_selectedFile = QString::fromLocal8Bit(GetCurrentBackDropName());
 
     connect(m_backgroundList, &QListWidget::currentItemChanged, this,
             [this](QListWidgetItem*, QListWidgetItem*) { previewSelection(); });
+}
+
+void CBackgroundPage::showEvent(QShowEvent* event)
+{
+    QWidget::showEvent(event);
+    initializePage();
+}
+
+void CBackgroundPage::hideEvent(QHideEvent* event)
+{
+    {
+        const QSignalBlocker blocker(m_backgroundList);
+        m_backgroundList->clear();
+    }
+    QWidget::hideEvent(event);
+}
+
+void CBackgroundPage::initializePage()
+{
+    const QSignalBlocker blocker(m_backgroundList);
+    m_backgroundList->clear();
+    for (const QString& fileName : OriginalBackdropNames()) {
+        auto* item = new QListWidgetItem(
+            displayArtName(QFileInfo(fileName).completeBaseName()),
+            m_backgroundList);
+        item->setData(Qt::UserRole, fileName);
+    }
+
+    QListWidgetItem* selectedItem = nullptr;
+    for (int index = 0; index < m_backgroundList->count(); ++index) {
+        QListWidgetItem* item = m_backgroundList->item(index);
+        const QString fileName = item->data(Qt::UserRole).toString();
+        if (fileName.compare(m_selectedFile, Qt::CaseInsensitive) == 0
+            || QFileInfo(fileName).completeBaseName().compare(
+                   m_selectedFile, Qt::CaseInsensitive) == 0) {
+            selectedItem = item;
+            break;
+        }
+    }
+    m_backgroundList->setCurrentItem(selectedItem);
+    if (!selectedItem) {
+        m_backgroundList->clearSelection();
+        m_backgroundList->selectionModel()->clearCurrentIndex();
+    }
+    static_cast<CBackgroundListWidget*>(m_backgroundList)
+        ->preserveNoCurrentItem(!selectedItem);
     previewSelection();
 }
 
@@ -392,10 +871,7 @@ void CBackgroundPage::previewSelection()
 {
     QListWidgetItem* item = m_backgroundList->currentItem();
     if (!item) {
-        m_selectedFile.clear();
         m_preview->clear();
-        m_copyright->setPlainText(originalResourceString(
-            QStringLiteral("IDS_AUTHOR_NONE_BK")));
         return;
     }
 
@@ -414,11 +890,14 @@ void CBackgroundPage::previewSelection()
 
 void CBackgroundPage::apply()
 {
-    if (m_selectedFile.isEmpty()) {
-        return;
+    const int status = currentRoom
+        ? currentRoom->GetConnectionStatus() : CX_DISCONNECTED;
+    if (status == CX_INCHANNEL || status == CX_DISCONNECTED) {
+        AddAndExecute(new ChangeBackDropEntry(m_selectedFile));
+    } else {
+        const QByteArray encoded = QFile::encodeName(m_selectedFile);
+        SetBackDrop(encoded.constData(), nullptr);
     }
-    const QByteArray encoded = QFile::encodeName(m_selectedFile);
-    SetBackDrop(encoded.constData(), nullptr);
 }
 
 // -----------------------------------------------------------------------------
@@ -776,18 +1255,90 @@ QFont comicLogicalFont(const QFont& dialogFont)
     return logicalFont;
 }
 
+class CComicFontDialog final : public QFontDialog {
+public:
+    CComicFontDialog(const QFont& initialFont, COLORREF initialColor,
+                     QWidget* parent)
+        : QFontDialog(initialFont, parent)
+        , m_color(new QComboBox)
+    {
+        setObjectName(QStringLiteral("CComicFontDialog"));
+        setOption(QFontDialog::DontUseNativeDialog, true);
+
+        auto* colorRow = new QWidget(this);
+        colorRow->setObjectName(QStringLiteral("comicFontColorRow"));
+        auto* rowLayout = new QHBoxLayout(colorRow);
+        rowLayout->setContentsMargins(0, 0, 0, 0);
+        auto* label = new QLabel(originalDialogControlText(
+            QStringLiteral("IDD_SETTEXTFONT"),
+            QStringLiteral("1091")), colorRow);
+        m_color->setParent(colorRow);
+        m_color->setObjectName(QStringLiteral("1139"));
+        label->setBuddy(m_color);
+        rowLayout->addWidget(label);
+        rowLayout->addWidget(m_color, 1);
+
+        INT initialIndex = -1;
+        for (COLORREF color : clrTable) {
+            QPixmap swatch(18, 12);
+            swatch.fill(QColor(GetRValue(color), GetGValue(color),
+                               GetBValue(color)));
+            m_color->addItem(QIcon(swatch), QString(),
+                             QVariant::fromValue<quint32>(color));
+            if (color == initialColor) initialIndex = m_color->count() - 1;
+        }
+        if (initialIndex < 0) {
+            QPixmap swatch(18, 12);
+            swatch.fill(QColor(GetRValue(initialColor),
+                               GetGValue(initialColor),
+                               GetBValue(initialColor)));
+            m_color->insertItem(
+                0, QIcon(swatch), QString(),
+                QVariant::fromValue<quint32>(initialColor));
+            initialIndex = 0;
+        }
+        m_color->setCurrentIndex(initialIndex);
+        if (layout()) layout()->addWidget(colorRow);
+    }
+
+    COLORREF selectedColor() const
+    {
+        return m_color
+            ? static_cast<COLORREF>(
+                m_color->currentData().value<quint32>())
+            : RGB(0, 0, 0);
+    }
+
+    void done(int result) override
+    {
+        if (result == QDialog::Accepted) {
+            const QFont selected = currentFont();
+            qreal pointSize = selected.pointSizeF();
+            if (pointSize <= 0.0 && selected.pixelSize() > 0)
+                pointSize = selected.pixelSize() / 20.0;
+            if (pointSize < 8.0 || pointSize > 18.0) {
+                QApplication::beep();
+                return;
+            }
+        }
+        QFontDialog::done(result);
+    }
+
+private:
+    QComboBox* m_color = nullptr;
+};
+
 } // namespace
 
 void SetComicsFont()
 {
-    QFontDialog dialog(comicDialogFont(theApp.m_comicsFont),
-                       QApplication::activeWindow());
-    // The Qt dialog keeps the application's fixed Windows 98 palette. The
-    // host-native Linux dialog would leave that replacement boundary.
-    dialog.setOption(QFontDialog::DontUseNativeDialog, true);
+    CComicFontDialog dialog(comicDialogFont(theApp.m_comicsFont),
+                            theApp.m_comicsColor,
+                            QApplication::activeWindow());
 
     if (dialog.exec() == QDialog::Accepted) {
         QFont selected = comicLogicalFont(dialog.selectedFont());
+        theApp.m_comicsColor = dialog.selectedColor();
         CUnitPanelPage::SetFonts(selected, theApp.m_comicsColor);
         if (CSayWnd* say = GetSay()) say->SetFont(selected, TRUE);
     }
@@ -1550,7 +2101,9 @@ void COptionsDialog::build(BOOL comicsMode, UINT initialPageId)
 {
     setWindowTitle(originalResourceString(QStringLiteral("IDS_OPTIONS")));
     auto* tabs = new QTabWidget(this);
+    tabs->setObjectName(QStringLiteral("OptionsTabs"));
     auto* personal = new CPersonalPage(tabs);
+    auto* settings = new CSettingsPage(tabs);
     CComicsPropPage* comics = comicsMode
         ? new CComicsPropPage(tabs) : nullptr;
     auto* character = new CCharacterPage(tabs);
@@ -1560,6 +2113,8 @@ void COptionsDialog::build(BOOL comicsMode, UINT initialPageId)
     auto* servers = new CServersPage(tabs);
     tabs->addTab(personal, originalDialogCaption(
         QStringLiteral("IDD_PERSONALPAGE_IRC")));
+    tabs->addTab(settings, originalDialogCaption(
+        QStringLiteral("IDD_SETTINGSPAGE")));
     if (comicsMode) {
         tabs->addTab(comics, originalDialogCaption(
             QStringLiteral("IDD_COMICS_VIEW")));
@@ -1568,6 +2123,12 @@ void COptionsDialog::build(BOOL comicsMode, UINT initialPageId)
         tabs->addTab(background, originalDialogCaption(
             QStringLiteral("IDD_BACKGROUNDPAGE")));
     } else {
+        // These lightweight page objects also exist in the original text-mode
+        // stack, but without an active property-page window. Keep their Qt
+        // widgets explicitly hidden so showing the parent tab control cannot
+        // activate either art page.
+        character->hide();
+        background->hide();
         tabs->addTab(textFont, originalDialogCaption(
             QStringLiteral("IDD_TEXTFONTPAGE_IRC")));
     }
@@ -1576,6 +2137,8 @@ void COptionsDialog::build(BOOL comicsMode, UINT initialPageId)
 
     if (initialPageId == IDD_PERSONALPAGE_IRC)
         tabs->setCurrentWidget(personal);
+    else if (initialPageId == IDD_SETTINGSPAGE)
+        tabs->setCurrentWidget(settings);
     else if (initialPageId == IDD_COMICS_VIEW && comicsMode)
         tabs->setCurrentWidget(comics);
     else if (initialPageId == IDD_CHARACTERPAGE && comicsMode)
@@ -1590,24 +2153,35 @@ void COptionsDialog::build(BOOL comicsMode, UINT initialPageId)
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
                                          this);
     connect(buttons, &QDialogButtonBox::accepted, this,
-            [this, tabs, personal, comics, character, background,
+            [this, tabs, personal, settings, comics, character, background,
              textFont, servers, comicsMode] {
-        if (!personal->validate()) return;
+        if (!personal->validate()) {
+            tabs->setCurrentWidget(personal);
+            return;
+        }
+        if (!settings->validate()) {
+            tabs->setCurrentWidget(settings);
+            return;
+        }
         if (!servers->validate()) {
             tabs->setCurrentWidget(servers);
             return;
         }
+
+        // All page validation is complete before the first externally
+        // observable effect. Commit the only fallible staged model first.
+        if (!servers->apply()) {
+            tabs->setCurrentWidget(servers);
+            return;
+        }
         personal->apply();
+        settings->apply();
         if (comicsMode) {
             comics->apply();
             character->apply();
             background->apply();
         } else if (textFont) {
             textFont->apply();
-        }
-        if (!servers->apply()) {
-            tabs->setCurrentWidget(servers);
-            return;
         }
         accept();
     });

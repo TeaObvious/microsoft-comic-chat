@@ -95,23 +95,30 @@ QIcon toolbarIcon(const QString& path, int index, const QSize& buttonSize)
 }
 
 void appendContextItems(QMenu* menu, const QList<OriginalMenuItem>& items,
-                        const CChatToolBar::CommandInvoker& invoke)
+                        const CChatToolBar::CommandInvoker& invoke,
+                        const CChatToolBar::ContextActionConfigurer& configure)
 {
     for (const OriginalMenuItem& item : items) {
         if (item.type == OriginalMenuItemType::Separator) {
             menu->addSeparator();
         } else if (item.type == OriginalMenuItemType::Popup) {
             QMenu* child = menu->addMenu(item.text);
-            appendContextItems(child, item.children, invoke);
+            appendContextItems(child, item.children, invoke, configure);
         } else {
             QAction* action = menu->addAction(item.text);
-            action->setData(item.commandIdentifier);
-            action->setStatusTip(originalResourceString(
-                item.commandIdentifier).section(QLatin1Char('\n'), 0, 0));
-            QObject::connect(action, &QAction::triggered, menu,
-                             [invoke, command = item.commandIdentifier] {
-                if (invoke) invoke(command);
-            });
+            if (configure) {
+                configure(action, item.commandIdentifier);
+            } else {
+                action->setData(item.commandIdentifier);
+                action->setStatusTip(originalResourceString(
+                    item.commandIdentifier)
+                    .section(QLatin1Char('\n'), 0, 0));
+                QObject::connect(
+                    action, &QAction::triggered, menu,
+                    [invoke, command = item.commandIdentifier] {
+                        if (invoke) invoke(command);
+                    });
+            }
         }
     }
 }
@@ -125,11 +132,16 @@ CChatToolBar::CChatToolBar(QObject* parent)
 BOOL CChatToolBar::Create(QMainWindow* parentWindow, BOOL,
                           ActionFactory actionFactory,
                           CommandInvoker commandInvoker,
-                          FavoritesMenuProvider favoritesMenuProvider)
+                          FavoritesMenuProvider favoritesMenuProvider,
+                          ContextActionConfigurer contextActionConfigurer,
+                          MenuConfigurer menuConfigurer)
 {
     m_actionFactory = std::move(actionFactory);
     m_commandInvoker = std::move(commandInvoker);
     m_favoritesMenuProvider = std::move(favoritesMenuProvider);
+    m_contextActionConfigurer =
+        std::move(contextActionConfigurer);
+    m_menuConfigurer = std::move(menuConfigurer);
     BOOL visibility[3];
     for (int index = 0; index < 3; ++index)
         visibility[index] = (theApp.m_iShowBars & nShowFlags[index]) != 0;
@@ -244,7 +256,8 @@ QMenu* CChatToolBar::CreateContextMenu(QWidget* parent) const
     const QList<OriginalMenuItem> items = resource.size() == 1
         && resource.first().type == OriginalMenuItemType::Popup
         ? resource.first().children : resource;
-    appendContextItems(menu, items, m_commandInvoker);
+    appendContextItems(
+        menu, items, m_commandInvoker, m_contextActionConfigurer);
     for (QAction* action : menu->actions()) {
         const QString command = action->data().toString();
         UINT flag = 0;
@@ -259,6 +272,7 @@ QMenu* CChatToolBar::CreateContextMenu(QWidget* parent) const
             action->setChecked((theApp.m_iShowBars & flag) != 0);
         }
     }
+    if (m_menuConfigurer) m_menuConfigurer(menu);
     return menu;
 }
 
