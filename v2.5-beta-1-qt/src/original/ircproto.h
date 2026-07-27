@@ -68,6 +68,7 @@ bool CommunicationInits();
 void CommunicationCleanup();
 void ChatFillRoomList(CRoomList* roomList);
 void ChatFillUserList(CUserList* userList);
+long GetMyIP();
 
 class CIrcProto : public CRoomInfo {
 public:

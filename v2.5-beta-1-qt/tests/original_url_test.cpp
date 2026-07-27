@@ -10,6 +10,7 @@
 
 #include <QApplication>
 #include <QByteArray>
+#include <QFile>
 #include <QSet>
 #include <QTextCursor>
 #include <QTextEdit>
@@ -188,7 +189,16 @@ int main(int argc, char** argv)
 
     const QString sourcePrefix = originalDialogControlText(
         QStringLiteral("IDD_ABOUTBOX"), QStringLiteral("IDC_COPY"));
-    REQUIRE(!sourcePrefix.isEmpty());
+    QFile resourceFile(originalAssetPath(QStringLiteral("chat.rc")));
+    REQUIRE(resourceFile.open(QIODevice::ReadOnly));
+    const QByteArray resourceBytes = resourceFile.readAll();
+    REQUIRE(resourceBytes.contains("#pragma code_page(1252)"));
+    REQUIRE(resourceBytes.contains(
+        "Copyright \xA9 1996-1998 Microsoft Corporation"));
+    REQUIRE(!resourceBytes.contains(
+        "Copyright \xC2\xA9 1996-1998 Microsoft Corporation"));
+    REQUIRE(sourcePrefix
+            == QStringLiteral("Copyright © 1996-1998 Microsoft Corporation"));
     REQUIRE(sourcePrefix.toUtf8().size() > sourcePrefix.size());
     const QString textCoreMessage = sourcePrefix + QLatin1Char(' ')
         + QString::fromUtf8(sourceUrl);

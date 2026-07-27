@@ -25,6 +25,11 @@
 CIrcSocket serverConn;
 static CIrcProto* g_defaultIrcProto = nullptr;
 
+long GetMyIP()
+{
+    return static_cast<long>(serverConn.LocalIPv4Address());
+}
+
 namespace {
 constexpr auto kCcudi1 = "CCUDI1";
 constexpr char kActionId[] = "\001ACTION";

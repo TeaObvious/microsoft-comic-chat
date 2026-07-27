@@ -235,7 +235,6 @@ void CMainFrame::closeEvent(QCloseEvent* event)
         return;
     }
 
-    theApp.SaveToReg(FALSE);
     const QList<CChatDoc*> documents = g_docs;
     for (CChatDoc* document : documents) {
         if (!document || document->m_bStatusView
@@ -247,6 +246,7 @@ void CMainFrame::closeEvent(QCloseEvent* event)
             return;
         }
     }
+    theApp.SaveToReg(FALSE);
     for (CChatDoc* document : documents) {
         if (document && !document->IsCloseStarted())
             document->OnCloseDocument();
@@ -1126,6 +1126,7 @@ CMainFrame::CommandClass CMainFrame::commandClass(
         QStringLiteral("ID_PING_USER"),
         QStringLiteral("ID_GET_LOCALTIME"),
         QStringLiteral("ID_AWAY_TOGGLE"),
+        QStringLiteral("ID_SEND_FILE"),
         QStringLiteral("ID_SEND_EMAIL"),
         QStringLiteral("ID_VISIT_HOMEPAGE"),
         QStringLiteral("ID_CHANNELPROPS"),
@@ -1157,7 +1158,6 @@ CMainFrame::CommandClass CMainFrame::commandClass(
         QStringLiteral("ID_TURN_OFF_SOUNDS"),
         QStringLiteral("ID_PLAY_SOUND"),
         QStringLiteral("ID_START_NETMEETING"),
-        QStringLiteral("ID_SEND_FILE"),
         QStringLiteral("ID_HELP_TOPICS"),
         QStringLiteral("ID_HELP_RELEASENOTES")
     };
@@ -1295,6 +1295,8 @@ void CMainFrame::updateCommandUi()
     setActionsEnabled(m_commandActions, QStringLiteral("ID_VISIT_HOMEPAGE"),
                       m_doc && m_doc->OnUpdateVisitHomepage());
     setActionsEnabled(m_commandActions, QStringLiteral("ID_WHISPERBOX_MLIST"),
+                      m_doc && m_doc->OnUpdate1SelectionNotSelf());
+    setActionsEnabled(m_commandActions, QStringLiteral("ID_SEND_FILE"),
                       m_doc && m_doc->OnUpdate1SelectionNotSelf());
     setActionsEnabled(m_commandActions,
                       QStringLiteral("ID_ADMINISTRATOR_KICK"),
@@ -1618,6 +1620,8 @@ void CMainFrame::executeCommand(const QString& commandIdentifier)
         if (m_doc) m_doc->OnGetLocaltime();
     } else if (commandIdentifier == QLatin1String("ID_WHISPERBOX_MLIST")) {
         if (m_doc) m_doc->OnWhisperboxMlist();
+    } else if (commandIdentifier == QLatin1String("ID_SEND_FILE")) {
+        if (m_doc) m_doc->OnSendFile();
     } else if (commandIdentifier == QLatin1String("ID_SEND_EMAIL")) {
         if (m_doc) m_doc->OnSendEmail();
     } else if (commandIdentifier == QLatin1String("ID_VISIT_HOMEPAGE")) {

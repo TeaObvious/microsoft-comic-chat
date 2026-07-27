@@ -159,6 +159,7 @@ public:
     void OnPingUser();
     void OnGetLocaltime();
     void OnWhisperboxMlist();
+    void OnSendFile();
     void OnSendEmail();
     void OnVisitHomepage();
     void OnAdministratorKick();

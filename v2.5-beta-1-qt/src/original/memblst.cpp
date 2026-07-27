@@ -139,6 +139,8 @@ bool MemberCommandEnabled(const QString& command, CChatDoc* document)
         return document->OnUpdateComicUserNotSelf();
     if (command == QLatin1String("ID_WHISPERBOX_MLIST"))
         return document->OnUpdate1SelectionNotSelf();
+    if (command == QLatin1String("ID_SEND_FILE"))
+        return document->OnUpdate1SelectionNotSelf();
     if (command == QLatin1String("ID_VISIT_HOMEPAGE"))
         return document->OnUpdateVisitHomepage();
     if (command == QLatin1String("ID_MEMBER_GETCHAR"))
@@ -165,10 +167,8 @@ bool MemberCommandEnabled(const QString& command, CChatDoc* document)
         return valid && macro >= 0 && macro < NMACROS
             && document->OnUpdateMacro(ID_MACRO_A0 + macro);
     }
-    // filesend.* and the CB32/NetMeeting path are not present yet. Keep the
-    // original resource entries visible without inventing an implementation.
-    if (command == QLatin1String("ID_SEND_FILE")
-        || command == QLatin1String("ID_START_NETMEETING")) {
+    // The CB32/NetMeeting path is excluded from the Modern build.
+    if (command == QLatin1String("ID_START_NETMEETING")) {
         return false;
     }
     return false;
@@ -195,6 +195,8 @@ void ExecuteMemberCommand(const QString& command, CChatDoc* document)
         document->OnGetLocaltime();
     else if (command == QLatin1String("ID_WHISPERBOX_MLIST"))
         document->OnWhisperboxMlist();
+    else if (command == QLatin1String("ID_SEND_FILE"))
+        document->OnSendFile();
     else if (command == QLatin1String("ID_SEND_EMAIL"))
         document->OnSendEmail();
     else if (command == QLatin1String("ID_VISIT_HOMEPAGE"))

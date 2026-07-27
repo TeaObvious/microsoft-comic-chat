@@ -367,6 +367,7 @@ public:
     void Reset();
     void SendRaw(const QString& raw);
     void SendRaw(const QByteArray& raw);
+    quint32 LocalIPv4Address() const;
     void ProcessMessage(const QString& line);
     void ProcessMessageBytes(const QByteArray& line);
     void HandleCommand(QString& displayLine, const QString& sourceLine,

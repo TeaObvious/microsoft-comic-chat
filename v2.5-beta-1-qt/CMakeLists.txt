@@ -111,6 +111,7 @@ set(COMIC_CHAT_PORT_SOURCES
     src/original/chatsrv.cpp
     src/original/ircsock.cpp
     src/original/ircproto.cpp
+    src/original/filesend.cpp
     src/original/ccommon.cpp
     src/original/intl.c
     src/original/jis2sjis.cpp

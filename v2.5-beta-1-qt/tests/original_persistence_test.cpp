@@ -28,6 +28,7 @@
 #include <QTemporaryDir>
 #include <QTextEdit>
 #include <QTimer>
+#include <QVariantMap>
 
 #include "textcore.h"
 
@@ -58,6 +59,15 @@ QString settingsRoot()
 QString key(const QString& name)
 {
     return settingsRoot() + QLatin1Char('/') + name;
+}
+
+QVariantMap settingsSnapshot(QSettings& settings)
+{
+    settings.sync();
+    QVariantMap snapshot;
+    for (const QString& setting : settings.allKeys())
+        snapshot.insert(setting, settings.value(setting));
+    return snapshot;
 }
 
 class CountingIrcProto final : public CIrcProto {
@@ -873,8 +883,12 @@ int main(int argc, char** argv)
             frame.GetMDIArea()->subWindowList().size();
         const int tab = frame.GetTabBar()->FindTabNum(document);
         CChatDoc* active = frame.GetActiveDocument();
+        const QString savedProfile = theApp.m_myProfile;
 
         document->SetModifiedFlag(true);
+        const QVariantMap settingsBeforeCancel = settingsSnapshot(stored);
+        theApp.m_myProfile =
+            QStringLiteral("must not persist from cancelled close");
         bool sawCancel = false;
         answerNextMessage(QMessageBox::Cancel, &sawCancel);
         REQUIRE(!frame.close());
@@ -886,6 +900,7 @@ int main(int argc, char** argv)
         REQUIRE(frame.GetMDIArea()->subWindowList().size()
                 == childCount);
         REQUIRE(frame.GetTabBar()->FindTabNum(document) == tab);
+        REQUIRE(settingsSnapshot(stored) == settingsBeforeCancel);
 
         QTemporaryDir doomedDirectory;
         REQUIRE(doomedDirectory.isValid());
@@ -896,6 +911,10 @@ int main(int argc, char** argv)
         document->SetModifiedFlag(true);
         REQUIRE(QFile::remove(doomedPath));
         REQUIRE(QDir().rmdir(doomedDirectory.path()));
+        const QVariantMap settingsBeforeFailedSave =
+            settingsSnapshot(stored);
+        theApp.m_myProfile =
+            QStringLiteral("must not persist from failed save");
         bool sawFailedSave = false;
         answerNextMessage(QMessageBox::Save, &sawFailedSave);
         REQUIRE(!frame.close());
@@ -903,6 +922,8 @@ int main(int argc, char** argv)
         REQUIRE(!document->IsCloseStarted());
         REQUIRE(document->IsModified());
         REQUIRE(frame.GetActiveDocument() == active);
+        REQUIRE(settingsSnapshot(stored) == settingsBeforeFailedSave);
+        theApp.m_myProfile = savedProfile;
         document->SetModifiedFlag(false);
         theApp.m_pMainWnd = nullptr;
         theApp.m_pExitingDoc = nullptr;

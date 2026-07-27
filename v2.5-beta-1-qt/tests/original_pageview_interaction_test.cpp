@@ -385,7 +385,8 @@ int main(int argc, char** argv)
                 QStringLiteral("ID_VISIT_HOMEPAGE"),
                 QStringLiteral("ID_GET_VERSION"),
                 QStringLiteral("ID_PING_USER"),
-                QStringLiteral("ID_GET_LOCALTIME")
+                QStringLiteral("ID_GET_LOCALTIME"),
+                QStringLiteral("ID_SEND_FILE")
             };
             for (const QString& command : enabledCommands) {
                 QAction* action = findCommand(menu, command);
@@ -406,8 +407,6 @@ int main(int argc, char** argv)
                 QStringLiteral("ID_DEFINE_MACRO")) == defineMacro);
             REQUIRE(macro->text() == QStringLiteral("%1\tAlt+0").arg(
                 originalResourceString(QStringLiteral("IDS_DEFAULT_NICK"))));
-            REQUIRE(!findCommand(menu, QStringLiteral("ID_SEND_FILE"))
-                         ->isEnabled());
             REQUIRE(!findCommand(menu, QStringLiteral("ID_START_NETMEETING"))
                          ->isEnabled());
             QAction* ping = findCommand(

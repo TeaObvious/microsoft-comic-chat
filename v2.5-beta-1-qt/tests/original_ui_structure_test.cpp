@@ -251,7 +251,10 @@ int main(int argc, char** argv)
         splitter.show();
         application.processEvents();
         const QList<int> sizes = splitter.sizes();
-        if (sizes.size() != 2 || sizes[1] != splitter.SayMinimumPixels()) {
+        // Modern's DPI-unaware DpiScale(23) evaluates to exactly 23.
+        if (splitter.SayMinimumPixels() != 23
+            || sizes.size() != 2
+            || sizes[1] != splitter.SayMinimumPixels()) {
             qWarning() << "fixed splitter" << sizes << splitter.SayMinimumPixels();
             return EXIT_FAILURE;
         }
@@ -524,7 +527,6 @@ int main(int argc, char** argv)
             QStringLiteral("ID_TURN_OFF_SOUNDS"),
             QStringLiteral("ID_PLAY_SOUND"),
             QStringLiteral("ID_START_NETMEETING"),
-            QStringLiteral("ID_SEND_FILE"),
             QStringLiteral("ID_HELP_TOPICS"),
             QStringLiteral("ID_HELP_RELEASENOTES")
         };
@@ -1141,15 +1143,38 @@ int main(int argc, char** argv)
             memberMenu, QStringLiteral("ID_ADDTONOTIFICATIONS"));
         QAction* getCharacter = directCommand(
             memberMenu, QStringLiteral("ID_MEMBER_GETCHAR"));
+        QAction* sendFile = directCommand(
+            memberMenu, QStringLiteral("ID_SEND_FILE"));
         if (profile < 0 || identity != profile + 1
             || character != identity + 1
             || !notifications || !notifications->isEnabled()
             || !getCharacter || !getCharacter->isEnabled()
+            || !sendFile || !sendFile->isEnabled()
             || getCharacter->text() != originalResourceString(
                 QStringLiteral("IDS_GET_CHARACTER"))) {
             qWarning() << "member menu state" << commands
                        << (notifications && notifications->isEnabled())
-                       << (getCharacter && getCharacter->isEnabled());
+                       << (getCharacter && getCharacter->isEnabled())
+                       << (sendFile && sendFile->isEnabled());
+            return EXIT_FAILURE;
+        }
+
+        selfMember.SelectInMemberList(&selfMember, TRUE, FALSE);
+        memberMenu->aboutToShow();
+        if (sendFile->isEnabled()) {
+            qWarning() << "Send File enabled for the local member";
+            return EXIT_FAILURE;
+        }
+        otherMember.SelectInMemberList(&otherMember, TRUE, TRUE);
+        memberMenu->aboutToShow();
+        if (sendFile->isEnabled()) {
+            qWarning() << "Send File enabled for multiple members";
+            return EXIT_FAILURE;
+        }
+        otherMember.SelectInMemberList(&otherMember, TRUE, FALSE);
+        memberMenu->aboutToShow();
+        if (!sendFile->isEnabled()) {
+            qWarning() << "Send File disabled for one remote member";
             return EXIT_FAILURE;
         }
 

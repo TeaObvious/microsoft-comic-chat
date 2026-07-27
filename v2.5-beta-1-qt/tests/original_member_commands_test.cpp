@@ -366,8 +366,10 @@ int main(int argc, char** argv)
     self.SelectInMemberList(&self, TRUE, FALSE);
     REQUIRE(document.SelectedMemberCount() == 1);
     REQUIRE(document.GetSingleSelectedMember() == &self);
+    REQUIRE(!document.OnUpdate1SelectionNotSelf());
     other.SelectInMemberList(&other, TRUE, TRUE);
     REQUIRE(document.SelectedMemberCount() == 2);
+    REQUIRE(!document.OnUpdate1SelectionNotSelf());
     REQUIRE(memberList.currentUser() == &other);
     other.SelectInMemberList(&other, FALSE, FALSE);
     REQUIRE(document.SelectedMemberCount() == 0);

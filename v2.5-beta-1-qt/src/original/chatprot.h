@@ -80,6 +80,7 @@ public:
     virtual void ChatGetLocalTime(CUserInfo* pui);
     virtual void ChatGetEmail(CUserInfo* pui);
     virtual void ChatGetHomePage(CUserInfo* pui);
+    virtual void ChatSendFile(CUserInfo* pui);
     virtual bool ChatSetTopic(const QString&) { return false; }
     virtual bool ChatSetMode(DWORD, DWORD, const QString&) { return false; }
     virtual bool bChatShowMOTD() { return false; }

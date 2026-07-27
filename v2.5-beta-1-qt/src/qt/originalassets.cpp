@@ -308,7 +308,10 @@ QString originalRcText()
         if (!file.open(QIODevice::ReadOnly)) {
             return QString();
         }
-        return QString::fromUtf8(file.readAll());
+        // chat.rc explicitly declares Windows code page 1252. Its tracked
+        // non-ASCII resource byte is therefore decoded in that byte domain,
+        // rather than treating the file as UTF-8.
+        return QString::fromLatin1(file.readAll());
     }();
     return text;
 }

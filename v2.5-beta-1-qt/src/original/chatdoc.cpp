@@ -620,6 +620,12 @@ void CChatDoc::OnWhisperboxMlist()
     if (CUserInfo* pui = GetSingleSelectedMember()) WhisperBox(pui);
 }
 
+void CChatDoc::OnSendFile()
+{
+    CUserInfo* pui = GetSingleSelectedMember();
+    if (pui && m_proto) m_proto->ChatSendFile(pui);
+}
+
 void CChatDoc::OnSendEmail()
 {
     CUserInfo* pui = GetSingleSelectedMember();

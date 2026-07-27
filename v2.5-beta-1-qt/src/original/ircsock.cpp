@@ -21,6 +21,7 @@
 #include "userinfo.h"
 
 #include <QHostInfo>
+#include <QHostAddress>
 #include <QMessageBox>
 #include <QTcpSocket>
 #include <QTimer>
@@ -1043,6 +1044,14 @@ void CIrcSocket::SendRaw(const QByteArray& raw)
     if (m_socket->state() == QAbstractSocket::ConnectedState) {
         m_socket->write(raw);
     }
+}
+
+quint32 CIrcSocket::LocalIPv4Address() const
+{
+    if (!m_socket) return 0;
+    bool ok = false;
+    const quint32 address = m_socket->localAddress().toIPv4Address(&ok);
+    return ok ? address : 0;
 }
 
 void CIrcSocket::handleConnected()

@@ -7,10 +7,12 @@
 #include "admindlg.h"
 #include "avatar.h"
 #include "avatario.h"
+#include "ccommon.h"
 #include "chat.h"
 #include "chatdoc.h"
 #include "chanprop.h"
 #include "chatsrv.h"
+#include "filesend.h"
 #include "histent.h"
 #include "ircproto.h"
 #include "mainfrm.h"
@@ -104,6 +106,30 @@ BOOL ArtDirsOK()
 namespace {
 bool g_bSendComicsData = true;
 QString g_lastBackdropName;
+
+bool sourceByteCaseInsensitiveEqual(const QString& left,
+                                    const QString& right)
+{
+    if (left.size() != right.size()) return false;
+    for (qsizetype index = 0; index < left.size(); ++index) {
+        ushort leftCharacter = left.at(index).unicode();
+        ushort rightCharacter = right.at(index).unicode();
+        if (leftCharacter >= 'A' && leftCharacter <= 'Z')
+            leftCharacter += 'a' - 'A';
+        if (rightCharacter >= 'A' && rightCharacter <= 'Z')
+            rightCharacter += 'a' - 'A';
+        if (leftCharacter != rightCharacter) return false;
+    }
+    return true;
+}
+
+bool sourceSpace(QChar character)
+{
+    return character == QLatin1Char(' ')
+        || character == QLatin1Char('\t')
+        || character == QLatin1Char('\n')
+        || character == QLatin1Char('\r');
+}
 
 QString lowLevelUnquoteCtcp(const QString& value)
 {
@@ -1695,8 +1721,8 @@ void ProcessSayAux(CChatDoc* doc, CUserInfo* pui, QString message,
     } else if (startsCaseInsensitive(fileDcc)) {
         const QString offset = message.mid(g_nFileDCCLen);
         if (!pui->Ignored() && !pui->IsFlooding()
-            && !offset.isEmpty() && offset.front().isSpace()) {
-            // ChatReceiveFile remains in the original filesend.* boundary.
+            && !offset.isEmpty() && sourceSpace(offset.front())) {
+            ChatReceiveFile(pui, offset.mid(1));
         }
         return;
     } else if (startsCaseInsensitive(email)) {
@@ -1999,19 +2025,25 @@ CUserInfo* ExternalPui(const QString& nickname, const QString& fullName,
 {
     for (CUserInfo* pui : externalPuis) {
         if (!pui
-            || pui->GetName().compare(nickname, Qt::CaseInsensitive) != 0) {
+            || !sourceByteCaseInsensitiveEqual(pui->GetName(), nickname)) {
             continue;
         }
         const QString existingFullName = pui->GetFullName();
+        // The original bug #2540 fix accepts a missing full name on either
+        // side and fills an existing empty value when one becomes available.
         if (fullName.isNull() || fullName.isEmpty()
             || existingFullName.isEmpty()
-            || existingFullName.compare(fullName, Qt::CaseInsensitive) == 0) {
+            || sourceByteCaseInsensitiveEqual(existingFullName, fullName)) {
             if (existingFullName.isEmpty() && !fullName.isEmpty()) {
                 pui->SetFullName(fullName);
             }
             return pui;
         }
     }
+
+    // The source calls stricmp here, but explicitly notes that RÉGIS
+    // (Alt+0201) and régis (Alt+0233) are different IRCX users. Fold only
+    // ASCII letters; every non-ASCII source byte must remain exact.
     if (!addIfNotThere) return nullptr;
 
     auto* pui = new CUserInfo(nickname, fullName);
@@ -2453,6 +2485,13 @@ CUserInfo* LookupPui(const QString& nickname, CChatDoc* doc)
     if (!doc) doc = GetChatDoc();
     if (!doc) return nullptr;
     if (CUserInfo* direct = doc->m_mapNickToPtr.value(name)) return direct;
+
+    // CNCSMapStringToPtr is no-case for regular IRC nickname keys, but a
+    // leading apostrophe marks an IRCX UTF-8 nickname whose key is exact.
+    if (!name.isEmpty()
+        && name.front() == QLatin1Char(g_chExtNckPfx)) {
+        return nullptr;
+    }
     for (auto it = doc->m_mapNickToPtr.cbegin();
          it != doc->m_mapNickToPtr.cend(); ++it) {
         if (it.key().compare(name, Qt::CaseInsensitive) == 0) return it.value();

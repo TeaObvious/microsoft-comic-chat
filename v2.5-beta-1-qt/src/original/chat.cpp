@@ -11,6 +11,7 @@
 #include "bodycam.h"
 #include "chatbars.h"
 #include "format.h"
+#include "filesend.h"
 #include "ircproto.h"
 #include "intl.h"
 #include "mainfrm.h"
@@ -581,6 +582,7 @@ int CChatApp::run(QApplication& app)
     DestroyWhisperBox();
     DestroyNotificationBox();
     DestroyExternalUserInfos();
+    CleanupFileProgressStore(TRUE);
     CleanRoomInfos();
     CommunicationCleanup();
     return result;

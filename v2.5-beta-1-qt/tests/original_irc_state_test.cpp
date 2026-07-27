@@ -1,4 +1,5 @@
 #include "avatar.h"
+#include "ccommon.h"
 #include "chat.h"
 #include "chatdoc.h"
 #include "histent.h"
@@ -91,6 +92,48 @@ int main(int argc, char** argv)
     CMemberList members;
     document.m_memberList = &members;
     members.SetIconMode(true);
+
+    {
+        const QString ordinaryNick = firstSourceName.toLower();
+        const QString alternateCase = ordinaryNick.toUpper();
+        REQUIRE(ordinaryNick != alternateCase);
+        CUserInfo ordinaryUser(ordinaryNick);
+        document.m_mapNickToPtr.insert(ordinaryNick, &ordinaryUser);
+        REQUIRE(LookupPui(alternateCase) == &ordinaryUser);
+        document.m_mapNickToPtr.remove(ordinaryNick);
+
+        QString exactIrcxNick = ordinaryNick;
+        exactIrcxNick.prepend(QLatin1Char(g_chExtNckPfx));
+        QString changedIrcxNick = alternateCase;
+        changedIrcxNick.prepend(QLatin1Char(g_chExtNckPfx));
+        CUserInfo exactIrcxUser(exactIrcxNick);
+        document.m_mapNickToPtr.insert(exactIrcxNick, &exactIrcxUser);
+        REQUIRE(LookupPui(exactIrcxNick) == &exactIrcxUser);
+        REQUIRE(LookupPui(changedIrcxNick) == nullptr);
+        exactIrcxNick.prepend(QLatin1Char(SC_HOST));
+        REQUIRE(LookupPui(exactIrcxNick) == &exactIrcxUser);
+        document.m_mapNickToPtr.remove(exactIrcxUser.GetName());
+    }
+
+    {
+        const QString asciiNick = secondSourceName.toLower();
+        CUserInfo* asciiExternal = ExternalPui(asciiNick, QString(), true);
+        REQUIRE(asciiExternal != nullptr);
+        REQUIRE(ExternalPui(asciiNick.toUpper(), QString(), false)
+                == asciiExternal);
+
+        // The original source's Alt+0201/Alt+0233 example requires ASCII
+        // no-case matching around an exact non-ASCII identity byte.
+        const QString upperRegis = QString::fromLatin1("R\xC9" "GIS");
+        const QString asciiVariant = QString::fromLatin1("r\xC9" "gis");
+        const QString lowerRegis = QString::fromLatin1("r\xE9" "gis");
+        CUserInfo* upperExternal = ExternalPui(upperRegis, QString(), true);
+        REQUIRE(ExternalPui(asciiVariant, QString(), false)
+                == upperExternal);
+        CUserInfo* lowerExternal = ExternalPui(lowerRegis, QString(), true);
+        REQUIRE(lowerExternal != upperExternal);
+        DestroyExternalUserInfos();
+    }
 
     const QString nick = originalResourceString(QStringLiteral("IDS_DEFAULT_NICK"));
     const QString channel = originalResourceString(QStringLiteral("IDS_DEFAULT_CHANNEL"));

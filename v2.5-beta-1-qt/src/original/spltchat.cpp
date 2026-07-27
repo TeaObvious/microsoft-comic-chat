@@ -130,8 +130,10 @@ CSplitSay::CSplitSay(QWidget* parent)
 int CSplitSay::SayMinimumPixels() const
 {
     if (theApp.m_bShowMode) return 0;
-    const qreal dpi = logicalDpiY() > 0 ? logicalDpiY() : 96.0;
-    return qRound(NPIXELSSAYMIN * dpi / 96.0);
+    // Modern deliberately runs DPI-unaware, so DpiScale(23) is exactly 23.
+    // Qt widget coordinates are already logical pixels; applying logicalDpiY
+    // again would double-scale this one splitter relative to the rest.
+    return NPIXELSSAYMIN;
 }
 
 void CSplitSay::applyOriginalSizes(bool initialSizing)
