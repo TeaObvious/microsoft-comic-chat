@@ -2806,8 +2806,9 @@ void ConfirmAway(const QString* conditionallyOnText)
 {
     if (!theApp.m_bAway || !theApp.m_bAwayPrompt) return;
     if (conditionallyOnText && conditionallyOnText->startsWith(QLatin1Char('/'))) {
-        const QString command = conditionallyOnText->section(
-            QRegularExpression(QStringLiteral("\\s")), 0, 0);
+        const qsizetype space = conditionallyOnText->indexOf(QLatin1Char(' '));
+        const QString command = space >= 0
+            ? conditionallyOnText->left(space) : *conditionallyOnText;
         if (command.compare(QStringLiteral("/AWAY"),
                             Qt::CaseInsensitive) == 0) return;
     }
@@ -2816,7 +2817,7 @@ void ConfirmAway(const QString* conditionallyOnText)
         theApp.m_pMainWnd.data(),
         originalResourceString(QStringLiteral("AFX_IDS_APP_TITLE")),
         originalResourceString(IDS_CONFIRMAWAY),
-        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
     if (answer == QMessageBox::Yes) {
         theApp.m_bAway = false;
         theApp.m_bAwayPrompt = false;
@@ -3562,6 +3563,8 @@ bool bChatSendText(QString str, unsigned short modes, bool echo,
                    CDWordArray* formatting, const QString* encodedChannelName,
                    bool whispereesFilled, bool invokedByWhisperBox)
 {
+    if (!(modes & BM_WHISPER)) ConfirmAway(&str);
+
     const int lengthBeforeRightTrim = str.size();
     while (!str.isEmpty() && str.back().isSpace()) str.chop(1);
     if (str.isEmpty()) return true;
@@ -3571,13 +3574,13 @@ bool bChatSendText(QString str, unsigned short modes, bool echo,
     if (!proto && doc) proto = doc->m_proto;
     if (!proto) proto = GetDefaultProto();
     if (encodedChannelName && !encodedChannelName->isEmpty()) {
-        if (!doc || !doc->m_proto
-            || doc->m_proto->m_strChannel.compare(*encodedChannelName,
-                                                   Qt::CaseInsensitive) != 0
-            || doc->GetConnectionStatus() != CX_INCHANNEL) {
+        CChatDoc* target = LookupDoc(*encodedChannelName);
+        if (!target || target == theApp.m_pExitingDoc
+            || target->GetConnectionStatus() != CX_INCHANNEL) {
             return true;
         }
-        proto = doc->m_proto;
+        doc = target;
+        proto = target->m_proto;
     }
     if (!proto) return true;
     if (str.startsWith(QLatin1Char('/'))) {

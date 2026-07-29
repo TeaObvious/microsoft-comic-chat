@@ -9,6 +9,7 @@
 #include <QString>
 
 class CNotificationUsers;
+class CIrcProto;
 
 inline constexpr char g_szAllLines[] = "1-999999";
 inline constexpr char g_szRandomLine[] = "RND";
@@ -30,6 +31,9 @@ QString StrGetKeyActionParam(enumKeyActionParam key,
                              QString& eventChannel,
                              QString& eventRecipients,
                              QString& eventControlLessMessage);
+BOOL bSendOrWhisperFileLine(CIrcProto* protocol,
+                            CCActionContext* actionContext,
+                            BOOL whisper);
 BOOL bExecuteAction(CCDynaRules* dynaRules, CCRule* rule,
                     CCActionContext* actionContext);
 BOOL bRuleDaemonQuery(CCRule* rule);

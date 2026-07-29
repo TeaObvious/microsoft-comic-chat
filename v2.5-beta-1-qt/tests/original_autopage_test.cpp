@@ -1,27 +1,37 @@
 #include "autopage.h"
 
+#include "actions.h"
 #include "chatdoc.h"
 #include "format.h"
 #include "ircproto.h"
 #include "originalassets.h"
+#include "protsupp.h"
+#include "rtfcmb.h"
 #include "userinfo.h"
 
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDir>
+#include <QFile>
 #include <QFontMetrics>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QPointer>
 #include <QPushButton>
 #include <QSet>
 #include <QSpinBox>
 #include <QStandardItemModel>
+#include <QStyle>
+#include <QStyleOptionComboBox>
 #include <QTabWidget>
+#include <QTemporaryDir>
 #include <QTextEdit>
 #include <QTimer>
 #include <QTreeWidget>
+#include <QWidget>
 
 #include <algorithm>
 #include <cstdio>
@@ -44,6 +54,32 @@ public:
     }
     QStringList sent;
 };
+
+class TestRtfCmb final : public CRtfCmb {
+public:
+    using CRtfCmb::CRtfCmb;
+
+    void OpenPopup() { showPopup(); }
+    void ClosePopup() { hidePopup(); }
+};
+
+BOOL executeFileAction(enumActions action, const QString& target,
+                       const QString& fileName, const QString& ranges)
+{
+    CCRule rule(&theApp.m_dynaRules);
+    rule.SetEvent(theApp.m_rulesData.GetEvent(eOnMessage));
+    rule.SetAction(theApp.m_rulesData.GetAction(action));
+    REQUIRE(rule.GetEvent() != nullptr && rule.GetAction() != nullptr);
+    const QString parameters[] = {target, fileName, ranges};
+    for (UINT index = 0; index < g_uMaxActionParams; ++index) {
+        rule.SetActionKeyParam(index, kapMax);
+        rule.SetActionParam(index, parameters[index]);
+    }
+    REQUIRE(theApp.m_dynaRules.bReplaceKeyActionParams(&rule));
+    CCActionContext context;
+    REQUIRE(context.bInitActionContext(&theApp.m_dynaRules, &rule));
+    return bExecuteAction(&theApp.m_dynaRules, &rule, &context);
+}
 
 const OriginalDialogControl* resourceControl(
     const OriginalDialogResource& dialog, const QString& identifier)
@@ -99,8 +135,7 @@ T* pointerFromData(const QVariant& value)
 
 bool unsupportedAction(enumActions action)
 {
-    return action == aPlaySound || action == aSendSound
-        || action == aSendFileLine || action == aWhisperFileLine;
+    return action == aPlaySound || action == aSendSound;
 }
 
 QString ruleSetName(const QString& resourceIdentifier)
@@ -116,6 +151,105 @@ int main(int argc, char** argv)
     QApplication application(argc, argv);
     theApp.InitVals();
     theApp.InitializeFonts();
+
+    {
+        QWidget owner;
+        owner.resize(360, 100);
+        owner.show();
+        TestRtfCmb combo(&owner);
+        combo.setGeometry(20, 20, 260, combo.sizeHint().height());
+        combo.addItem(QStringLiteral("Keyword"));
+        combo.show();
+        application.processEvents();
+
+        const Qt::FocusPolicy plainFocusPolicy = combo.focusPolicy();
+        REQUIRE(combo.bSetRtfMode(TRUE));
+        REQUIRE(combo.bGetRtfMode());
+        REQUIRE(combo.focusPolicy() == Qt::ClickFocus);
+        REQUIRE(combo.bAttachRtfCtrl(QStringLiteral("IDC_TEST_RTF")));
+        CRtfCmbEdit* richEdit = combo.GetRtfCmbEdit();
+        REQUIRE(richEdit != nullptr);
+        REQUIRE(richEdit->objectName() == QStringLiteral("IDC_TEST_RTF"));
+        REQUIRE(!richEdit->m_bAcceptMultiLine);
+        REQUIRE(richEdit->tabChangesFocus());
+        REQUIRE(richEdit->lineWrapMode() == QTextEdit::NoWrap);
+        REQUIRE(richEdit->horizontalScrollBarPolicy()
+                == Qt::ScrollBarAlwaysOff);
+        REQUIRE(richEdit->verticalScrollBarPolicy()
+                == Qt::ScrollBarAlwaysOff);
+
+        QStyleOptionComboBox styleOption;
+        styleOption.initFrom(&combo);
+        styleOption.editable = combo.isEditable();
+        const QRect comboEditRect = combo.style()->subControlRect(
+            QStyle::CC_ComboBox, &styleOption,
+            QStyle::SC_ComboBoxEditField, &combo);
+        const QRect expectedRichRect(
+            combo.mapTo(&owner, comboEditRect.topLeft()),
+            comboEditRect.size());
+        REQUIRE(richEdit->geometry() == expectedRichRect);
+        REQUIRE(richEdit->geometry().right() < combo.geometry().right());
+
+        combo.LimitText(4);
+        combo.SetWindowText(QStringLiteral("abcdef"));
+        application.processEvents();
+        REQUIRE(combo.GetWindowText() == QStringLiteral("abcd"));
+        REQUIRE(combo.lineEdit()->text() == QStringLiteral("abcd"));
+        combo.LimitText(g_uMaxParamLength);
+        combo.SetWindowText(QStringLiteral("first\nsecond\r\nthird"));
+        REQUIRE(combo.GetWindowText() == QStringLiteral("firstsecondthird"));
+
+        // Rebuilding the source keyword list must not clear the separately
+        // formatted edit control layered over the combo's edit field.
+        combo.clear();
+        combo.addItem(QStringLiteral("Keyword"));
+        REQUIRE(combo.GetWindowText() == QStringLiteral("firstsecondthird"));
+        combo.SetWindowText(QStringLiteral("selection"));
+        combo.lineEdit()->setSelection(1, 3);
+        combo.RedirectSelection();
+        REQUIRE(richEdit->textCursor().selectedText()
+                == QStringLiteral("ele"));
+
+        QLineEdit popupFocusTarget(&owner);
+        popupFocusTarget.show();
+        popupFocusTarget.setFocus();
+        combo.ClosePopup();
+        application.processEvents();
+        REQUIRE(QApplication::focusWidget() == richEdit);
+
+        REQUIRE(QMetaObject::invokeMethod(
+            &combo, "activated", Qt::DirectConnection, Q_ARG(int, 0)));
+        REQUIRE(combo.GetWindowText() == QStringLiteral("Keyword"));
+        REQUIRE(richEdit->textCursor().selectedText()
+                == QStringLiteral("Keyword"));
+
+        QKeyEvent returnKey(QEvent::KeyPress, Qt::Key_Return,
+                            Qt::NoModifier, QStringLiteral("\n"));
+        QApplication::sendEvent(richEdit, &returnKey);
+        REQUIRE(combo.GetWindowText() == QStringLiteral("Keyword"));
+
+        QLineEdit nextControl(&owner);
+        nextControl.setGeometry(20, 60, 120, 24);
+        nextControl.show();
+        nextControl.setFocus();
+        application.processEvents();
+        REQUIRE(richEdit->textCursor().position() == 0);
+        REQUIRE(richEdit->textCursor().anchor() == 0);
+        REQUIRE(richEdit->viewport()->cursor().shape() == Qt::ArrowCursor);
+
+        combo.hide();
+        REQUIRE(richEdit->isHidden());
+        combo.show();
+        application.processEvents();
+        REQUIRE(richEdit->isVisible());
+
+        QPointer<CRtfCmbEdit> deletedEdit = richEdit;
+        REQUIRE(combo.bSetRtfMode(FALSE));
+        REQUIRE(!combo.bGetRtfMode());
+        REQUIRE(deletedEdit.isNull());
+        REQUIRE(combo.GetRtfCmbEdit() == nullptr);
+        REQUIRE(combo.focusPolicy() == plainFocusPolicy);
+    }
 
     REQUIRE(theApp.m_rulesData.bInitAlloc());
     REQUIRE(theApp.m_rulesData.bLoadStrings());
@@ -255,6 +389,155 @@ int main(int argc, char** argv)
         document.m_proto = nullptr;
     }
 
+    {
+        QTemporaryDir files;
+        REQUIRE(files.isValid());
+        QDir base(files.path());
+        REQUIRE(base.mkdir(QStringLiteral("Nested")));
+        QFile lines(base.filePath(QStringLiteral("Nested/Lines.TXT")));
+        REQUIRE(lines.open(QIODevice::WriteOnly));
+        REQUIRE(lines.write("one\r\n\r\ntwo\nthree") == 16);
+        lines.close();
+
+        const QString savedBaseDir = theApp.m_strBaseDir;
+        theApp.m_strBaseDir = files.path();
+        REQUIRE(CommunicationInits());
+        struct CommunicationCleanupGuard {
+            ~CommunicationCleanupGuard() { CommunicationCleanup(); }
+        } communicationCleanup;
+
+        CapturingIrcProto activeProtocol;
+        CapturingIrcProto targetProtocol;
+        CChatDoc activeDocument;
+        CChatDoc targetDocument;
+        delete activeDocument.m_proto;
+        delete targetDocument.m_proto;
+        activeDocument.m_proto = &activeProtocol;
+        targetDocument.m_proto = &targetProtocol;
+        activeProtocol.m_doc = &activeDocument;
+        targetProtocol.m_doc = &targetDocument;
+        activeProtocol.m_strChannel = QStringLiteral("#file-source");
+        activeProtocol.m_strPrettyChannel = activeProtocol.m_strChannel;
+        targetProtocol.m_strChannel = QStringLiteral("#file-target");
+        targetProtocol.m_strPrettyChannel = targetProtocol.m_strChannel;
+        activeProtocol.SetConnectionStatus(CX_INCHANNEL);
+        targetProtocol.SetConnectionStatus(CX_INCHANNEL);
+        activeDocument.m_bComicView = false;
+        targetDocument.m_bComicView = false;
+
+        auto* activeSelf = new CUserInfo(
+            originalResourceString(QStringLiteral("IDS_DEFAULT_NICK")));
+        auto* targetSelf = new CUserInfo(
+            originalResourceString(QStringLiteral("IDS_DEFAULT_NICK")));
+        auto* targetUser = new CUserInfo(QStringLiteral("Other"),
+                                         QStringLiteral("user@example.test"));
+        activeDocument.m_puiSelf = activeSelf;
+        activeDocument.m_allChannelPuis.append(activeSelf);
+        activeDocument.m_mapNickToPtr.insert(activeSelf->GetName(), activeSelf);
+        targetDocument.m_puiSelf = targetSelf;
+        targetDocument.m_allChannelPuis = {targetSelf, targetUser};
+        targetDocument.m_mapNickToPtr.insert(targetSelf->GetName(), targetSelf);
+        targetDocument.m_mapNickToPtr.insert(targetUser->GetName(), targetUser);
+        SetChatDoc(&activeDocument);
+
+        const QString relativeFile = QStringLiteral("nested\\lines.txt");
+        REQUIRE(executeFileAction(
+            aSendFileLine, targetProtocol.m_strPrettyChannel,
+            relativeFile, QStringLiteral("3,1-2,4")));
+        REQUIRE(targetProtocol.sent == QStringList({
+            QStringLiteral("PRIVMSG #file-target :two\r\n"),
+            QStringLiteral("PRIVMSG #file-target :one\r\n"),
+            QStringLiteral("PRIVMSG #file-target :three\r\n")}));
+
+        // A missing file and a bad interval after an already valid interval
+        // are both source-defined handled actions without user-facing errors.
+        targetProtocol.sent.clear();
+        REQUIRE(executeFileAction(
+            aSendFileLine, targetProtocol.m_strPrettyChannel,
+            QStringLiteral("missing.txt"), QStringLiteral("1")));
+        REQUIRE(targetProtocol.sent.isEmpty());
+        REQUIRE(executeFileAction(
+            aSendFileLine, targetProtocol.m_strPrettyChannel,
+            relativeFile, QStringLiteral("1,,2")));
+        REQUIRE(targetProtocol.sent == QStringList({
+            QStringLiteral("PRIVMSG #file-target :one\r\n")}));
+        targetProtocol.sent.clear();
+        REQUIRE(executeFileAction(
+            aSendFileLine, targetProtocol.m_strPrettyChannel,
+            relativeFile, QStringLiteral("1-2 3")));
+        REQUIRE(targetProtocol.sent == QStringList({
+            QStringLiteral("PRIVMSG #file-target :one\r\n"),
+            QStringLiteral("PRIVMSG #file-target :two\r\n")}));
+
+        targetProtocol.sent.clear();
+        REQUIRE(executeFileAction(
+            aSendFileLine, targetProtocol.m_strPrettyChannel,
+            relativeFile,
+            theApp.m_rulesData.GetKeyActionParam(kapAll)));
+        REQUIRE(targetProtocol.sent == QStringList({
+            QStringLiteral("PRIVMSG #file-target :one\r\n"),
+            QStringLiteral("PRIVMSG #file-target :two\r\n"),
+            QStringLiteral("PRIVMSG #file-target :three\r\n")}));
+
+        std::srand(173);
+        const UINT randomLine = static_cast<UINT>(
+            4 * (static_cast<float>(std::rand())
+                 / (static_cast<float>(RAND_MAX) + 1.0F))
+            + 1.0F);
+        std::srand(173);
+        targetProtocol.sent.clear();
+        REQUIRE(executeFileAction(
+            aSendFileLine, targetProtocol.m_strPrettyChannel,
+            relativeFile,
+            theApp.m_rulesData.GetKeyActionParam(kapRandom)));
+        const QStringList sourceLines = {
+            QStringLiteral("one"), QString(), QStringLiteral("two"),
+            QStringLiteral("three")};
+        const QString randomlySelected = sourceLines.at(randomLine - 1);
+        if (randomlySelected.isEmpty()) {
+            REQUIRE(targetProtocol.sent.isEmpty());
+        } else {
+            REQUIRE(targetProtocol.sent == QStringList({
+                QStringLiteral("PRIVMSG #file-target :%1\r\n")
+                    .arg(randomlySelected)}));
+        }
+
+        targetProtocol.sent.clear();
+        REQUIRE(executeFileAction(
+            aWhisperFileLine,
+            targetUser->GetName() + QLatin1Char(';') + targetUser->GetName(),
+            relativeFile, QStringLiteral("1-4")));
+        REQUIRE(targetProtocol.sent == QStringList({
+            QStringLiteral("PRIVMSG Other :one\r\n"),
+            QStringLiteral("PRIVMSG Other :two\r\n"),
+            QStringLiteral("PRIVMSG Other :three\r\n")}));
+
+        CCRule validated(&theApp.m_dynaRules);
+        validated.SetEvent(theApp.m_rulesData.GetEvent(eOnMessage));
+        validated.SetAction(theApp.m_rulesData.GetAction(aSendFileLine));
+        UINT validationError = 0;
+        QString invalidRange = QStringLiteral("1,,2");
+        REQUIRE(!validated.bValidateRuleAction(
+            2, invalidRange, &validationError));
+        REQUIRE(validationError == IDS_ERR_FILELINERANGE);
+        QString reversedRange = QStringLiteral("4-2,1");
+        REQUIRE(validated.bValidateRuleAction(
+            2, reversedRange, &validationError));
+        REQUIRE(validationError == 0);
+        QString sourceWhitespaceRange = QStringLiteral("1-2 3");
+        REQUIRE(validated.bValidateRuleAction(
+            2, sourceWhitespaceRange, &validationError));
+        REQUIRE(validationError == 0);
+
+        g_rgpuiWhisperees.clear();
+        SetChatDoc(nullptr);
+        activeProtocol.m_doc = nullptr;
+        targetProtocol.m_doc = nullptr;
+        activeDocument.m_proto = nullptr;
+        targetDocument.m_proto = nullptr;
+        theApp.m_strBaseDir = savedBaseDir;
+    }
+
     CCDynaRules ruleSetsCopy;
     ruleSetsCopy = theApp.m_dynaRules;
     {
@@ -341,7 +624,11 @@ int main(int argc, char** argv)
             QStringLiteral("IDC_CMBACTIONS"));
         auto* ok = editor.findChild<QPushButton*>(QStringLiteral("IDOK"));
         REQUIRE(events && actions && ok);
+        REQUIRE(dynamic_cast<CRtfCmb*>(events) != nullptr);
+        REQUIRE(dynamic_cast<CRtfCmb*>(actions) != nullptr);
         REQUIRE(events->count() == static_cast<INT>(eMax));
+        editor.show();
+        application.processEvents();
 
         QSet<INT> eventIDs;
         QSet<INT> actionIDs;
@@ -401,6 +688,212 @@ int main(int argc, char** argv)
         }
         REQUIRE(eventIDs.size() == static_cast<INT>(eMax));
         REQUIRE(actionIDs.size() == static_cast<INT>(aMax));
+
+        auto selectAction = [&](enumActions wanted) -> CCAction* {
+            for (INT eventIndex = 0;
+                 eventIndex < events->count(); ++eventIndex) {
+                CCEvent* event = pointerFromData<CCEvent>(
+                    events->itemData(eventIndex));
+                const DWORD actionBit = DWORD{1}
+                    << static_cast<UINT>(wanted);
+                if (!event || !(event->GetEnabledActions() & actionBit))
+                    continue;
+                events->setCurrentIndex(eventIndex);
+                application.processEvents();
+                for (INT actionIndex = 0;
+                     actionIndex < actions->count(); ++actionIndex) {
+                    CCAction* action = pointerFromData<CCAction>(
+                        actions->itemData(actionIndex));
+                    if (action && action->GetID() == wanted) {
+                        actions->setCurrentIndex(actionIndex);
+                        application.processEvents();
+                        return action;
+                    }
+                }
+            }
+            return nullptr;
+        };
+
+        REQUIRE(selectAction(aSendMessage) != nullptr);
+        auto* richMessage = dynamic_cast<CRtfCmb*>(
+            editor.findChild<QComboBox*>(QStringLiteral("IDC_CMBAP1")));
+        REQUIRE(richMessage != nullptr);
+        REQUIRE(richMessage->isVisible());
+        REQUIRE(richMessage->bGetRtfMode());
+        CRtfCmbEdit* richMessageEdit = richMessage->GetRtfCmbEdit();
+        REQUIRE(richMessageEdit != nullptr);
+        REQUIRE(richMessageEdit->isVisible());
+        REQUIRE(richMessageEdit->objectName()
+                == QStringLiteral("IDC_RTFAP1"));
+        QStyleOptionComboBox richStyleOption;
+        richStyleOption.initFrom(richMessage);
+        richStyleOption.editable = richMessage->isEditable();
+        const QRect richComboEditRect =
+            richMessage->style()->subControlRect(
+                QStyle::CC_ComboBox, &richStyleOption,
+                QStyle::SC_ComboBoxEditField, richMessage);
+        REQUIRE(richMessageEdit->geometry() == QRect(
+            richMessage->mapTo(&editor, richComboEditRect.topLeft()),
+            richComboEditRect.size()));
+        REQUIRE(richMessageEdit->geometry().right()
+                < richMessage->geometry().right());
+
+        auto expectedKeywords = [](CCEvent* event, CCAction* action,
+                                   UINT parameter) {
+            QStringList result;
+            UINT bit = 1;
+            const UINT keys = action->GetKeyParam(parameter);
+            const DWORD exposed = event->GetActionKeysExposed();
+            for (UINT key = 0; key < static_cast<UINT>(kapMax); ++key) {
+                if ((keys & bit) && (exposed & bit)) {
+                    result.append(theApp.m_rulesData.GetKeyActionParam(
+                        static_cast<enumKeyActionParam>(key)));
+                }
+                bit <<= 1;
+            }
+            return result;
+        };
+        auto comboItems = [](QComboBox* combo) {
+            QStringList result;
+            for (INT index = 0; index < combo->count(); ++index)
+                result.append(combo->itemText(index));
+            return result;
+        };
+        CCAction* sendMessageAction = pointerFromData<CCAction>(
+            actions->currentData());
+        CCEvent* initialMessageEvent = pointerFromData<CCEvent>(
+            events->currentData());
+        REQUIRE(sendMessageAction
+                && sendMessageAction->GetID() == aSendMessage);
+        const QStringList initialKeywords = expectedKeywords(
+            initialMessageEvent, sendMessageAction, 1);
+        REQUIRE(comboItems(richMessage) == initialKeywords);
+        richMessage->SetWindowText(QStringLiteral("formatted text"));
+        bool checkedChangedExposure = false;
+        for (INT eventIndex = 0;
+             eventIndex < events->count(); ++eventIndex) {
+            CCEvent* candidate = pointerFromData<CCEvent>(
+                events->itemData(eventIndex));
+            if (!candidate
+                || !(candidate->GetEnabledActions()
+                     & (DWORD{1} << static_cast<UINT>(aSendMessage)))) {
+                continue;
+            }
+            const QStringList candidateKeywords = expectedKeywords(
+                candidate, sendMessageAction, 1);
+            if (candidateKeywords == initialKeywords) continue;
+            events->setCurrentIndex(eventIndex);
+            application.processEvents();
+            REQUIRE(pointerFromData<CCAction>(actions->currentData())
+                    == sendMessageAction);
+            REQUIRE(comboItems(richMessage) == candidateKeywords);
+            REQUIRE(richMessage->GetWindowText()
+                    == QStringLiteral("formatted text"));
+            checkedChangedExposure = true;
+            break;
+        }
+        REQUIRE(checkedChangedExposure);
+
+        auto focusBelongsTo = [](QWidget* widget) {
+            QWidget* focused = QApplication::focusWidget();
+            return widget && focused
+                && (focused == widget || widget->isAncestorOf(focused));
+        };
+        auto pressTab = [&](bool forward) {
+            QWidget* focused = QApplication::focusWidget();
+            REQUIRE(focused != nullptr);
+            QKeyEvent tabKey(
+                QEvent::KeyPress,
+                forward ? Qt::Key_Tab : Qt::Key_Backtab,
+                forward ? Qt::NoModifier : Qt::ShiftModifier);
+            QApplication::sendEvent(focused, &tabKey);
+            application.processEvents();
+        };
+        auto* firstMessageParameter =
+            editor.findChild<QComboBox*>(QStringLiteral("IDC_CMBAP0"));
+        auto* delayControl =
+            editor.findChild<QSpinBox*>(QStringLiteral("IDC_RULEDELAY"));
+        auto* subRulesControl =
+            editor.findChild<QCheckBox*>(QStringLiteral("IDC_CHKSUBRULES"));
+        REQUIRE(firstMessageParameter && delayControl && subRulesControl);
+        actions->setFocus();
+        application.processEvents();
+        pressTab(true);
+        REQUIRE(focusBelongsTo(firstMessageParameter));
+        pressTab(true);
+        REQUIRE(focusBelongsTo(richMessageEdit));
+        pressTab(true);
+        QWidget* afterLastParameter = delayControl->isEnabled()
+            ? static_cast<QWidget*>(delayControl)
+            : static_cast<QWidget*>(subRulesControl);
+        REQUIRE(focusBelongsTo(afterLastParameter));
+        pressTab(false);
+        REQUIRE(focusBelongsTo(richMessageEdit));
+
+        REQUIRE(selectAction(aNotifyDialog) != nullptr);
+        auto* plainNotification = dynamic_cast<CRtfCmb*>(
+            editor.findChild<QComboBox*>(QStringLiteral("IDC_CMBAP0")));
+        REQUIRE(plainNotification != nullptr);
+        REQUIRE(plainNotification->isVisible());
+        REQUIRE(!plainNotification->bGetRtfMode());
+        REQUIRE(plainNotification->GetRtfCmbEdit() == nullptr);
+
+        REQUIRE(selectAction(aSendFileLine) != nullptr);
+        auto* textFiles = dynamic_cast<CRtfCmb*>(
+            editor.findChild<QComboBox*>(QStringLiteral("IDC_CMBAP1")));
+        REQUIRE(textFiles != nullptr);
+        REQUIRE(textFiles->isVisible());
+        REQUIRE(!textFiles->bGetRtfMode());
+        QSet<QString> enumeratedTextFiles;
+        for (INT index = 0; index < textFiles->count(); ++index)
+            enumeratedTextFiles.insert(textFiles->itemText(index));
+        const QSet<QString> expectedTextFiles = {
+            QStringLiteral("Irc.txt"),
+            QStringLiteral("Ircnew.txt"),
+            QStringLiteral("Ircorig.txt"),
+            QStringLiteral("Profile.txt"),
+            QStringLiteral("Rtwsupport.txt"),
+            QStringLiteral("Strings.txt")};
+        REQUIRE(enumeratedTextFiles == expectedTextFiles);
+
+        QTemporaryDir enumerationTree;
+        REQUIRE(enumerationTree.isValid());
+        QDir enumerationBase(enumerationTree.path());
+        REQUIRE(enumerationBase.mkdir(QStringLiteral("Sub")));
+        REQUIRE(enumerationBase.mkdir(QStringLiteral(".ignored")));
+        auto writeEnumerationFile = [](const QString& path) {
+            QFile file(path);
+            REQUIRE(file.open(QIODevice::WriteOnly));
+            REQUIRE(file.write("test") == 4);
+        };
+        writeEnumerationFile(enumerationBase.filePath(
+            QStringLiteral("Sub/mixed.TxT")));
+        writeEnumerationFile(enumerationBase.filePath(
+            QStringLiteral(".ignored/hidden.txt")));
+        writeEnumerationFile(enumerationBase.filePath(
+            QStringLiteral("README.TXT")));
+        writeEnumerationFile(enumerationBase.filePath(
+            QStringLiteral("license.txt")));
+        writeEnumerationFile(enumerationBase.filePath(
+            QStringLiteral("support.txt")));
+        const QString sourceBaseDir = theApp.m_strBaseDir;
+        theApp.m_strBaseDir = enumerationTree.path();
+        REQUIRE(selectAction(aNotifyDialog) != nullptr);
+        REQUIRE(selectAction(aSendFileLine) != nullptr);
+        REQUIRE(textFiles->count() == 1);
+        REQUIRE(textFiles->itemText(0)
+                == QStringLiteral("Sub\\Mixed.txt"));
+        theApp.m_strBaseDir = sourceBaseDir;
+
+        REQUIRE(selectAction(aConnect) != nullptr);
+        auto* networkParameter = dynamic_cast<CChatServiceComboBox*>(
+            editor.findChild<QComboBox*>(QStringLiteral("IDC_CMBAPNS")));
+        auto* coveredParameter = editor.findChild<QComboBox*>(
+            QStringLiteral("IDC_CMBAP1"));
+        REQUIRE(networkParameter != nullptr && coveredParameter != nullptr);
+        REQUIRE(networkParameter->isVisible());
+        REQUIRE(coveredParameter->isHidden());
+        REQUIRE(networkParameter->geometry() == coveredParameter->geometry());
 
         auto* delay = editor.findChild<QSpinBox*>(
             QStringLiteral("IDC_RULEDELAY"));

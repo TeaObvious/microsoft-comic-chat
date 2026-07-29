@@ -4,6 +4,7 @@
 
 #include "rules.h"
 
+#include "actions.h"
 #include "ccommon.h"
 #include "notif.h"
 #include "originalassets.h"
@@ -1117,16 +1118,13 @@ BOOL CCRule::bValidateRuleAction(UINT index, QString& parameter, UINT* errorID)
     if (!m_pEvent || !m_pAction) return FALSE;
     if ((m_pAction->m_aID == aSendFileLine
          || m_pAction->m_aID == aWhisperFileLine) && index == 2) {
-        const QStringList ranges = parameter.split(QLatin1Char(','), Qt::SkipEmptyParts);
-        for (QString range : ranges) {
-            range = range.trimmed();
-            const QStringList ends = range.split(QLatin1Char('-'));
-            bool firstOK = false;
-            bool secondOK = true;
-            const UINT first = ends.value(0).trimmed().toUInt(&firstOK);
-            UINT second = first;
-            if (ends.size() == 2) second = ends.at(1).trimmed().toUInt(&secondOK);
-            if (ends.size() > 2 || !firstOK || !secondOK || !first || !second) {
+        QByteArray ranges = parameter.toLatin1();
+        char* range = ranges.data();
+        while (range && *range) {
+            UINT minimum = 0;
+            UINT maximum = 0;
+            if (!bGetNextRange(&range, &minimum, &maximum)
+                || !minimum || !maximum) {
                 if (errorID) *errorID = IDS_ERR_FILELINERANGE;
                 return FALSE;
             }

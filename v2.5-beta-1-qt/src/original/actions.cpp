@@ -20,6 +20,9 @@
 #include "whisprbx.h"
 
 #include <QApplication>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QGuiApplication>
 #include <QMessageBox>
 #include <QPointer>
@@ -179,6 +182,109 @@ BOOL whisperToUserInChannel(CIrcProto* protocol, CCActionContext* context)
     }
     return TRUE;
 }
+
+QString resolveCaseInsensitivePath(const QString& path)
+{
+    const QFileInfo requested(path);
+    if (requested.exists()) return requested.filePath();
+
+    const QString absolute = requested.absoluteFilePath();
+    QDir current(QDir::rootPath());
+    QString resolved = current.absolutePath();
+    const QString relative = current.relativeFilePath(absolute);
+    const QStringList parts = relative.split(
+        QLatin1Char('/'), Qt::SkipEmptyParts);
+    for (const QString& part : parts) {
+        const QStringList entries = current.entryList(
+            QDir::AllEntries | QDir::Hidden | QDir::System
+                | QDir::NoDotAndDotDot,
+            QDir::NoSort);
+        QString matched;
+        for (const QString& entry : entries) {
+            if (entry.compare(part, Qt::CaseInsensitive) == 0) {
+                matched = entry;
+                break;
+            }
+        }
+        if (matched.isEmpty()) return path;
+        resolved = current.filePath(matched);
+        current.setPath(resolved);
+    }
+    return resolved;
+}
+
+QString sourceTextFilePath(QString storedPath)
+{
+    const bool windowsAbsolute =
+        storedPath.size() >= 2 && storedPath.at(1) == QLatin1Char(':');
+    storedPath.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    if (storedPath.size() >= 2 && !windowsAbsolute
+        && !QDir::isAbsolutePath(storedPath)) {
+        storedPath = QDir(theApp.m_strBaseDir).filePath(storedPath);
+    }
+    return resolveCaseInsensitivePath(QDir::cleanPath(storedPath));
+}
+
+bool readSourceTextLines(const QString& fileName, QStringList* lines)
+{
+    if (!lines) return false;
+    lines->clear();
+    QFile file(sourceTextFilePath(fileName));
+    if (!file.open(QIODevice::ReadOnly)) return false;
+
+    while (!file.atEnd()) {
+        QByteArray bytes = file.readLine();
+        if (bytes.endsWith('\n')) bytes.chop(1);
+        if (bytes.endsWith('\r')) bytes.chop(1);
+        QString line;
+        if (!bCodePageToWide(bytes, GetACP(), &line))
+            line = QString::fromLatin1(bytes);
+        lines->append(line);
+    }
+    return true;
+}
+
+void sendSourceFileLine(CIrcProto* protocol, CCActionContext* context,
+                        const QString& message, BOOL whisper)
+{
+    if (message.isEmpty()) return;
+    if (!whisper) {
+        const QString channel = EncodeChan(context->GetFinalActionParam(0));
+        bChatSendText(message, BM_SAY, TRUE, nullptr, &channel, TRUE);
+        return;
+    }
+
+    QString recipients = context->GetFinalActionParam(0);
+    QList<CUserInfo*> handled;
+    while (!recipients.isEmpty()) {
+        const QString fullName = GetNextToken(recipients, ';', TRUE);
+        const QString decodedNickname = StrExtractNickname(fullName);
+        const QString ident = StrExtractIdent(fullName);
+        if (decodedNickname.isEmpty()) continue;
+        const QString encodedNickname =
+            protocol->IsIRCX() && bExtendedNickname(decodedNickname)
+            ? EncodeNick(decodedNickname) : decodedNickname;
+
+        CChatDoc* document = nullptr;
+        CUserInfo* user = PuiFromDocNickIdent(
+            &document, encodedNickname, ident, TRUE, TRUE);
+        if (!user || (document && user == document->m_puiSelf)
+            || handled.contains(user)) {
+            continue;
+        }
+        handled.append(user);
+
+        if (!document) {
+            WhisperBox(user, FALSE, FALSE);
+            bWhisperInBox(QString(), message, nullptr, BM_WHISPER);
+        } else {
+            g_rgpuiWhisperees.clear();
+            g_rgpuiWhisperees.append(user);
+            const QString channel = document->m_proto->m_strChannel;
+            bChatSendText(message, BM_WHISPER, TRUE, nullptr, &channel, TRUE);
+        }
+    }
+}
 }
 
 BOOL bGetNextRange(char** string, UINT* minimum, UINT* maximum)
@@ -203,7 +309,6 @@ BOOL bGetNextRange(char** string, UINT* minimum, UINT* maximum)
         *maximum = static_cast<UINT>(std::strtoul(current, &end, 10));
         current = nextStart(end);
         if (*current == ',') ++current;
-        else if (*current != '\0') goto failure;
         break;
     default:
         goto failure;
@@ -409,6 +514,55 @@ QString StrGetKeyActionParam(enumKeyActionParam key,
     }
 }
 
+BOOL bSendOrWhisperFileLine(CIrcProto* protocol, CCActionContext* context,
+                            BOOL whisper)
+{
+    if (!protocol || !context) return FALSE;
+
+    QStringList lines;
+    if (!readSourceTextLines(context->GetFinalActionParam(1), &lines)) {
+        // Source treats an unavailable configured file as a handled action.
+        return TRUE;
+    }
+
+    QByteArray ranges = context->GetFinalActionParam(2).toLatin1();
+    char* range = ranges.data();
+    UINT lineNumber = 1;
+    qsizetype position = 0;
+
+    while (range && *range) {
+        UINT minimum = 0;
+        UINT maximum = 0;
+        if (std::strcmp(range, g_szRandomLine) == 0) {
+            *range = '\0';
+            const UINT count = static_cast<UINT>(lines.size() - position);
+            minimum = maximum = static_cast<UINT>(
+                count * (static_cast<float>(std::rand())
+                         / (static_cast<float>(RAND_MAX) + 1.0F))
+                + 1.0F);
+            lineNumber = 999999;
+        } else if (!bGetNextRange(&range, &minimum, &maximum)) {
+            break;
+        }
+
+        if (lineNumber > minimum) {
+            lineNumber = 1;
+            position = 0;
+        }
+        while (lineNumber < minimum && position < lines.size()) {
+            ++position;
+            ++lineNumber;
+        }
+        if (lineNumber < minimum) continue;
+        while (lineNumber <= maximum && position < lines.size()) {
+            sendSourceFileLine(protocol, context, lines.at(position), whisper);
+            ++position;
+            ++lineNumber;
+        }
+    }
+    return TRUE;
+}
+
 BOOL bExecuteAction(CCDynaRules* dynaRules, CCRule* rule,
                     CCActionContext* context)
 {
@@ -575,6 +729,8 @@ BOOL bExecuteAction(CCDynaRules* dynaRules, CCRule* rule,
         return rule && dynaRules ? dynaRules->bReplaceMessage(rule) : FALSE;
     case aSendAction:
         return sendToChannel(context, BM_ACTION);
+    case aSendFileLine:
+        return bSendOrWhisperFileLine(protocol, context, FALSE);
     case aSendMessage:
         return sendToChannel(context, BM_SAY);
     case aSendThought:
@@ -583,6 +739,8 @@ BOOL bExecuteAction(CCDynaRules* dynaRules, CCRule* rule,
         return whisperToUser(protocol, context);
     case aSendWhisperInRoom:
         return whisperToUserInChannel(protocol, context);
+    case aWhisperFileLine:
+        return bSendOrWhisperFileLine(protocol, context, TRUE);
     case aDisconnect:
         ChatServerDisconnect(TRUE, FALSE);
         return TRUE;
@@ -599,9 +757,7 @@ BOOL bExecuteAction(CCDynaRules* dynaRules, CCRule* rule,
 
     // These effects remain at their original, not-yet-ported module borders.
     case aPlaySound:          // sounddlg.* / mcithrd.*
-    case aSendFileLine:       // filesend/text-file action path
     case aSendSound:          // sounddlg.* / mcithrd.*
-    case aWhisperFileLine:    // filesend/text-file action path
         return FALSE;
     default:
         return FALSE;

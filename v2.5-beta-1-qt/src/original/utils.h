@@ -1,19 +1,35 @@
 // Ported from v2.5-beta-1-modern/utils.h.
 //
-// Only CSimpleComboBox is required by the currently ported CServersPage.
 // QWidget replaces the Win32 CBS_SIMPLE control boundary; the edit/list
-// behaviour and the original class name stay in this module.
+// behaviour and the original class name stay in this module. FILEENUMSTRUCT
+// and EnumFiles retain the recursive source file-enumeration boundary used by
+// the Automation rule editor.
 
 #pragma once
 
+#include "wincompat.h"
+
 #include <QRect>
 #include <QString>
+#include <QStringList>
 #include <QVariant>
 #include <QWidget>
 
 class QLineEdit;
 class QListWidget;
 
+using FILEENUMADDFN = void (*)(qintptr context, const QString& path,
+                               const QString& fileName, int fileType);
+
+struct FILEENUMSTRUCT {
+    const char* pszTypes = nullptr;
+    FILEENUMADDFN pfnAdd = nullptr;
+    qintptr lParam = 0;
+    BOOL bRecursive = FALSE;
+    const char* pszSubFilter = nullptr;
+};
+
+void EnumFiles(const QString& path, FILEENUMSTRUCT* fileEnum);
 void MakeRectVisibleOnScreen(QRect* rect);
 
 class CSimpleComboBox : public QWidget {

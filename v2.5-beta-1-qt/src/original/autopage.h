@@ -8,7 +8,7 @@
 
 #include "chat.h"
 #include "notipage.h"
-#include "rtfctrl.h"
+#include "rtfcmb.h"
 #include "rules.h"
 
 #include <QDialog>
@@ -28,6 +28,7 @@ class QSpinBox;
 class QKeyEvent;
 class QMouseEvent;
 class QShowEvent;
+class CChatServiceComboBox;
 
 constexpr SHORT g_nIconCount = 2;
 constexpr SHORT g_nInactiveIndex = 0;
@@ -192,6 +193,7 @@ public:
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
+    bool focusNextPrevChild(bool next) override;
     void showEvent(QShowEvent* event) override;
     void accept() override;
 
@@ -215,11 +217,11 @@ private:
                             CDWordArray* formatting = nullptr);
     BOOL IsUnsupportedAction(enumActions action) const;
 
-    QComboBox* m_cmbEvents = nullptr;
+    CRtfCmb* m_cmbEvents = nullptr;
     QComboBox* m_cmbEventParams[g_uMaxEventParams]{};
-    QComboBox* m_cmbActions = nullptr;
-    QComboBox* m_cmbActionParams[g_uMaxActionParams]{};
-    CRtfCtrl* m_rtfActionParams[g_uMaxActionParams]{};
+    CRtfCmb* m_cmbActions = nullptr;
+    CRtfCmb* m_cmbActionParams[g_uMaxActionParams]{};
+    CChatServiceComboBox* m_cmbActionNetParam = nullptr;
     QLabel* m_lblEventParams[g_uMaxEventParams]{};
     QLabel* m_lblActionParams[g_uMaxActionParams]{};
     QLabel* m_lblParamDesc = nullptr;
@@ -229,6 +231,7 @@ private:
     QCheckBox* m_chkSubRules = nullptr;
     QSpinBox* m_spinDelay = nullptr;
     QPushButton* m_ok = nullptr;
+    QPushButton* m_cancel = nullptr;
     UCHAR m_uMinDelay = 0;
     UCHAR m_uDelay = 0;
     CCRule* m_pRule = nullptr;

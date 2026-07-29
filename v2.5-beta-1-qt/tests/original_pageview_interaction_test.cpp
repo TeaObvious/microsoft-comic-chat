@@ -65,6 +65,34 @@ BOOL invokeWithoutMessageBox(QApplication& application,
     return result;
 }
 
+template<typename Invocation>
+BOOL invokeWithArtServerMessageBox(QApplication& application,
+                                   Invocation invocation)
+{
+    bool messageBoxShown = false;
+    QTimer::singleShot(0, &application, [&] {
+        for (QWidget* widget : QApplication::topLevelWidgets()) {
+            auto* messageBox = qobject_cast<QMessageBox*>(widget);
+            if (!messageBox || !messageBox->isVisible()) continue;
+            messageBoxShown = true;
+            REQUIRE(messageBox->icon() == QMessageBox::Information);
+            REQUIRE(messageBox->windowTitle() == originalResourceString(
+                QStringLiteral("AFX_IDS_APP_TITLE")));
+            REQUIRE(messageBox->text() == QStringLiteral(
+                "The Comic Chat art servers are long gone, so custom "
+                "characters and backdrops can no longer be downloaded.\n\n"
+                "The characters bundled with this build will be used "
+                "instead."));
+            REQUIRE(messageBox->standardButtons() == QMessageBox::Ok);
+            messageBox->done(QMessageBox::Ok);
+        }
+    });
+    const BOOL result = invocation();
+    application.processEvents();
+    REQUIRE(messageBoxShown);
+    return result;
+}
+
 CUserInfo* otherUser(CChatDoc& document)
 {
     for (CUserInfo* pui : document.m_allChannelPuis) {
@@ -301,7 +329,7 @@ int main(int argc, char** argv)
         REQUIRE(members->count() == 2);
 
         other->SetFlag(UF_AUTODOWNLOAD | UF_INTERACTIVEDOWNLOAD, true);
-        REQUIRE(!invokeWithoutMessageBox(application, [&] {
+        REQUIRE(!invokeWithArtServerMessageBox(application, [&] {
             return theApp.StartDownloadingAvatar(other, &document, TRUE);
         }));
         REQUIRE(!other->CheckFlag(UF_AUTODOWNLOAD));

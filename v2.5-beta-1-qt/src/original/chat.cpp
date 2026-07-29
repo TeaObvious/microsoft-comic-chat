@@ -51,6 +51,9 @@
 #include <QtPrintSupport/QPrintDialog>
 #include <QtPrintSupport/QPrinter>
 
+#include <cstdlib>
+#include <ctime>
+
 #ifndef COMIC_CHAT_ENTRY_ONLY
 CChatApp theApp;
 
@@ -106,6 +109,27 @@ QFont resourceFont(const OriginalDialogResource& dialog)
     QFont font(dialog.fontFamily);
     if (dialog.fontPointSize > 0) font.setPointSize(dialog.fontPointSize);
     return font;
+}
+
+void NoteArtServersGoneOnce()
+{
+    // Comic Chat used to download custom characters and backdrops from
+    // Microsoft's art servers. They no longer exist, so explain the bundled
+    // fallback once and keep both download boundaries network-free.
+    static BOOL shown = FALSE;
+    if (shown) return;
+    shown = TRUE;
+
+    QWidget* owner = QApplication::activeWindow();
+    if (!owner) owner = theApp.m_pMainWnd.data();
+    QMessageBox::information(
+        owner,
+        originalResourceString(QStringLiteral("AFX_IDS_APP_TITLE")),
+        QStringLiteral(
+            "The Comic Chat art servers are long gone, so custom characters "
+            "and backdrops can no longer be downloaded.\n\n"
+            "The characters bundled with this build will be used instead."),
+        QMessageBox::Ok);
 }
 
 class CAboutDlg final : public QDialog {
@@ -501,6 +525,7 @@ int CChatApp::run(QApplication& app)
 
     win98palette::apply(app);
 
+    std::srand(static_cast<unsigned>(std::time(nullptr)));
     InitVals();
     InitializeFonts();
     m_lastBackDrop = originalResourceString(
@@ -1051,6 +1076,9 @@ BOOL CChatApp::OnUpdateViewLoginNotifs(BOOL* checked) const
 
 BOOL CChatApp::StartDownloadingAvatar(CUserInfo* user, CChatDoc*, BOOL)
 {
+    // Clear both pending flags after the notice so later messages do not keep
+    // retrying the unavailable avatar server.
+    NoteArtServersGoneOnce();
     if (!user) return FALSE;
     user->SetFlag(UF_AUTODOWNLOAD | UF_INTERACTIVEDOWNLOAD, false);
     return FALSE;
@@ -1058,6 +1086,8 @@ BOOL CChatApp::StartDownloadingAvatar(CUserInfo* user, CChatDoc*, BOOL)
 
 BOOL CChatApp::StartDownloadingBackdrop(const char*, const char*)
 {
+    // The room retains its bundled backdrop when the old server is requested.
+    NoteArtServersGoneOnce();
     return FALSE;
 }
 

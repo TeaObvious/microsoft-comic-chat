@@ -13,12 +13,14 @@
 #include "protsupp.h"
 #include "resource.h"
 #include "userinfo.h"
+#include "utils.h"
 #include "whisprbx.h"
 
 #include <QAbstractItemView>
 #include <QApplication>
 #include <QCheckBox>
 #include <QColor>
+#include <QDir>
 #include <QEvent>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -245,6 +247,28 @@ void applyRulesCopy(CCDynaRules* source)
     else
         theApp.m_dynaRules.bStopRulesDaemon();
     theApp.m_dynaRules.bUpdateRuleSetsDaemonExt(FALSE);
+}
+
+void AddTextFileToComboBox(qintptr context, const QString& path,
+                           const QString& fileName, int)
+{
+    auto* combo = reinterpret_cast<QComboBox*>(context);
+    if (!combo) return;
+
+    const QStringList reserved = originalResourceString(
+        QStringLiteral("IDS_TEXTFILES")).split(
+            QLatin1Char('\n'), Qt::SkipEmptyParts);
+    for (QString reservedName : reserved) {
+        reservedName.remove(QLatin1Char('\r'));
+        if (fileName.compare(reservedName, Qt::CaseInsensitive) == 0)
+            return;
+    }
+
+    QString relativePath = QDir(theApp.m_strBaseDir).relativeFilePath(path);
+    if (relativePath == QLatin1String(".")) relativePath.clear();
+    relativePath.replace(QLatin1Char('/'), QLatin1Char('\\'));
+    if (!relativePath.isEmpty()) relativePath += QLatin1Char('\\');
+    combo->addItem(relativePath + fileName + QString::fromLatin1(szTxtExt));
 }
 }
 
@@ -1810,8 +1834,15 @@ CEditRule::CEditRule(QWidget* parent)
         m_rgstrParamLabels[type] = originalResourceString(
             IDS_LBL_ACTIVATE + static_cast<INT>(type));
 
-    m_cmbEvents = new QComboBox(this);
+    m_cmbEvents = new CRtfCmb(this);
+    m_cmbEvents->setEditable(false);
     placeControl(m_cmbEvents, dialog, mapper, QStringLiteral("IDC_CMBEVENTS"));
+    {
+        QRect geometry = m_cmbEvents->geometry();
+        geometry.setHeight(qMin(geometry.height(),
+                                m_cmbEvents->sizeHint().height()));
+        m_cmbEvents->setGeometry(geometry);
+    }
     m_cmbEvents->setProperty("descriptionKind", QStringLiteral("events"));
     m_cmbEvents->installEventFilter(this);
 
@@ -1853,9 +1884,16 @@ CEditRule::CEditRule(QWidget* parent)
     placeControl(m_btnAdvanced, dialog, mapper,
                  QStringLiteral("IDC_BTNADVANCED"));
 
-    m_cmbActions = new QComboBox(this);
+    m_cmbActions = new CRtfCmb(this);
+    m_cmbActions->setEditable(false);
     placeControl(m_cmbActions, dialog, mapper,
                  QStringLiteral("IDC_CMBACTIONS"));
+    {
+        QRect geometry = m_cmbActions->geometry();
+        geometry.setHeight(qMin(geometry.height(),
+                                m_cmbActions->sizeHint().height()));
+        m_cmbActions->setGeometry(geometry);
+    }
     m_cmbActions->setProperty("descriptionKind", QStringLiteral("actions"));
     m_cmbActions->installEventFilter(this);
     m_lblActionHeader = new QLabel(controlText(
@@ -1868,21 +1906,22 @@ CEditRule::CEditRule(QWidget* parent)
     const QString actionComboIds[] = {QStringLiteral("IDC_CMBAP0"),
                                       QStringLiteral("IDC_CMBAP1"),
                                       QStringLiteral("IDC_CMBAP2")};
-    const QString actionRtfIds[] = {QStringLiteral("IDC_RTFAP0"),
-                                    QStringLiteral("IDC_RTFAP1"),
-                                    QStringLiteral("IDC_RTFAP2")};
     for (UINT index = 0; index < g_uMaxActionParams; ++index) {
         m_lblActionParams[index] = new QLabel(this);
         m_lblActionParams[index]->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         placeControl(m_lblActionParams[index], dialog, mapper,
                      actionLabelIds[index]);
-        auto* actionCombo = new CChatServiceComboBox(this);
-        actionCombo->SetServiceList(&theApp.m_listChatServices);
+        auto* actionCombo = new CRtfCmb(this);
         m_cmbActionParams[index] = actionCombo;
-        m_cmbActionParams[index]->setEditable(true);
-        m_cmbActionParams[index]->setInsertPolicy(QComboBox::NoInsert);
         placeControl(m_cmbActionParams[index], dialog, mapper,
                      actionComboIds[index]);
+        {
+            QRect geometry = m_cmbActionParams[index]->geometry();
+            geometry.setHeight(qMin(
+                geometry.height(),
+                m_cmbActionParams[index]->sizeHint().height()));
+            m_cmbActionParams[index]->setGeometry(geometry);
+        }
         if (m_cmbActionParams[index]->lineEdit())
             m_cmbActionParams[index]->lineEdit()->setMaxLength(
                 g_uMaxParamLength);
@@ -1893,20 +1932,19 @@ CEditRule::CEditRule(QWidget* parent)
         m_cmbActionParams[index]->installEventFilter(this);
         if (m_cmbActionParams[index]->lineEdit())
             m_cmbActionParams[index]->lineEdit()->installEventFilter(this);
-
-        m_rtfActionParams[index] = new CRtfCtrl(this);
-        m_rtfActionParams[index]->setObjectName(actionRtfIds[index]);
-        m_rtfActionParams[index]->setGeometry(
-            m_cmbActionParams[index]->geometry());
-        m_rtfActionParams[index]->m_crTextColor = RGB(0, 0, 0);
-        m_rtfActionParams[index]->DefineDefaultCharFormat();
-        m_rtfActionParams[index]->setProperty("descriptionKind",
-                                              QStringLiteral("actionParam"));
-        m_rtfActionParams[index]->setProperty("descriptionIndex",
-                                              static_cast<int>(index));
-        m_rtfActionParams[index]->installEventFilter(this);
-        m_rtfActionParams[index]->hide();
     }
+
+    m_cmbActionNetParam = new CChatServiceComboBox(this);
+    m_cmbActionNetParam->SetServiceList(&theApp.m_listChatServices);
+    m_cmbActionNetParam->setObjectName(QStringLiteral("IDC_CMBAPNS"));
+    if (m_cmbActionNetParam->lineEdit())
+        m_cmbActionNetParam->lineEdit()->setMaxLength(g_uMaxParamLength);
+    m_cmbActionNetParam->setProperty(
+        "descriptionKind", QStringLiteral("actionParam"));
+    m_cmbActionNetParam->installEventFilter(this);
+    if (m_cmbActionNetParam->lineEdit())
+        m_cmbActionNetParam->lineEdit()->installEventFilter(this);
+    m_cmbActionNetParam->hide();
 
     m_lblParamDesc = new QLabel(this);
     m_lblParamDesc->setWordWrap(true);
@@ -1933,9 +1971,9 @@ CEditRule::CEditRule(QWidget* parent)
     m_ok = new QPushButton(controlText(dialog, QStringLiteral("IDOK")), this);
     m_ok->setDefault(true);
     placeControl(m_ok, dialog, mapper, QStringLiteral("IDOK"));
-    auto* cancel = new QPushButton(controlText(
+    m_cancel = new QPushButton(controlText(
         dialog, QStringLiteral("IDCANCEL")), this);
-    placeControl(cancel, dialog, mapper, QStringLiteral("IDCANCEL"));
+    placeControl(m_cancel, dialog, mapper, QStringLiteral("IDCANCEL"));
 
     connect(m_cmbEvents, &QComboBox::currentIndexChanged,
             this, [this](int) { if (!m_bUpdating) OnEventChanged(); });
@@ -1946,7 +1984,7 @@ CEditRule::CEditRule(QWidget* parent)
     connect(m_btnAdvanced, &QPushButton::clicked,
             this, [this] { OnAdvancedClick(); });
     connect(m_ok, &QPushButton::clicked, this, &CEditRule::accept);
-    connect(cancel, &QPushButton::clicked, this, &QDialog::reject);
+    connect(m_cancel, &QPushButton::clicked, this, &QDialog::reject);
 }
 
 CEditRule::~CEditRule()
@@ -1972,8 +2010,6 @@ BOOL CEditRule::IsUnsupportedAction(enumActions action) const
     switch (action) {
     case aPlaySound:
     case aSendSound:
-    case aSendFileLine:
-    case aWhisperFileLine:
         return TRUE;
     default:
         return FALSE;
@@ -2092,21 +2128,48 @@ void CEditRule::FillParamLabels(BOOL events, BOOL actions)
     if (actions && m_pRule && m_pRule->GetAction()) {
         CCAction* action = m_pRule->GetAction();
         const UINT count = action->GetParamNum();
+        BOOL netParameterPresent = FALSE;
+        m_cmbActionNetParam->hide();
+        m_cmbActionNetParam->clear();
         for (UINT index = 0; index < g_uMaxActionParams; ++index) {
             const BOOL visible = index < count;
             m_lblActionParams[index]->setVisible(visible);
             m_cmbActionParams[index]->clear();
             if (!visible) {
                 m_cmbActionParams[index]->hide();
-                m_rtfActionParams[index]->hide();
                 continue;
             }
             const enumParamType type = action->GetParamType(index);
             m_lblActionParams[index]->setText(m_rgstrParamLabels[type]);
+            if (type == ptServerName) {
+                m_cmbActionParams[index]->hide();
+                m_cmbActionNetParam->setGeometry(
+                    m_cmbActionParams[index]->geometry());
+                m_cmbActionNetParam->setProperty(
+                    "descriptionIndex", static_cast<int>(index));
+                m_cmbActionNetParam->show();
+                netParameterPresent = TRUE;
+                continue;
+            }
+
             const BOOL rich = RTFParam(type, action->GetID());
-            m_cmbActionParams[index]->setVisible(!rich);
-            m_rtfActionParams[index]->setVisible(rich);
+            m_cmbActionParams[index]->bSetRtfMode(rich);
+            m_cmbActionParams[index]->LimitText(g_uMaxParamLength);
+            if (rich) {
+                m_cmbActionParams[index]->bAttachRtfCtrl(
+                    QStringLiteral("IDC_RTFAP%1").arg(index));
+                CRtfCmbEdit* editor =
+                    m_cmbActionParams[index]->GetRtfCmbEdit();
+                editor->m_crTextColor = RGB(0, 0, 0);
+                editor->setProperty(
+                    "descriptionKind", QStringLiteral("actionParam"));
+                editor->setProperty(
+                    "descriptionIndex", static_cast<int>(index));
+                editor->installEventFilter(this);
+            }
+            m_cmbActionParams[index]->show();
         }
+        if (!netParameterPresent) m_cmbActionNetParam->hide();
         m_lblActionHeader->setVisible(count > 0);
     }
 }
@@ -2141,9 +2204,8 @@ QString CEditRule::ActionParamText(UINT index) const
     if (!m_pRule || !m_pRule->GetAction()
         || index >= m_pRule->GetAction()->GetParamNum()) return {};
     const enumParamType type = m_pRule->GetAction()->GetParamType(index);
-    return RTFParam(type, m_pRule->GetAction()->GetID())
-        ? m_rtfActionParams[index]->toPlainText()
-        : m_cmbActionParams[index]->currentText();
+    if (type == ptServerName) return m_cmbActionNetParam->currentText();
+    return m_cmbActionParams[index]->GetWindowText();
 }
 
 void CEditRule::SetEventParamText(UINT index, const QString& text)
@@ -2157,14 +2219,20 @@ void CEditRule::SetActionParamText(UINT index, const QString& text,
     if (!m_pRule || !m_pRule->GetAction()
         || index >= m_pRule->GetAction()->GetParamNum()) return;
     const enumParamType type = m_pRule->GetAction()->GetParamType(index);
+    if (type == ptServerName) {
+        m_cmbActionNetParam->setEditText(text);
+        return;
+    }
     if (RTFParam(type, m_pRule->GetAction()->GetID())) {
-        m_rtfActionParams[index]->UseDefaultCharFormat();
-        m_rtfActionParams[index]->bSetTextColor(
-            m_rtfActionParams[index]->m_crTextColor);
-        m_rtfActionParams[index]->bSetWindowFormattedText(text, formatting);
-        m_rtfActionParams[index]->moveCursor(QTextCursor::Start);
+        CRtfCmbEdit* editor =
+            m_cmbActionParams[index]->GetRtfCmbEdit();
+        if (!editor) return;
+        editor->UseDefaultCharFormat();
+        editor->bSetTextColor(editor->m_crTextColor);
+        editor->bSetWindowFormattedText(text, formatting);
+        editor->moveCursor(QTextCursor::Start);
     } else {
-        m_cmbActionParams[index]->setEditText(text);
+        m_cmbActionParams[index]->SetWindowText(text);
     }
 }
 
@@ -2196,7 +2264,9 @@ BOOL CEditRule::bFillParamsFromRule(BOOL events, BOOL actions)
         const DWORD exposed = event->GetActionKeysExposed();
         for (UINT index = 0; index < action->GetParamNum(); ++index) {
             const enumParamType type = action->GetParamType(index);
-            QComboBox* combo = m_cmbActionParams[index];
+            QComboBox* combo = type == ptServerName
+                ? static_cast<QComboBox*>(m_cmbActionNetParam)
+                : static_cast<QComboBox*>(m_cmbActionParams[index]);
             combo->clear();
             switch (type) {
             case ptHighlight:
@@ -2221,10 +2291,18 @@ BOOL CEditRule::bFillParamsFromRule(BOOL events, BOOL actions)
                 }
                 break;
             case ptSoundFileName:
-            case ptTextFileName:
                 // Original enumeration belongs to sounddlg.* / utils.*.
-                // The combo remains empty/editable until those modules exist.
+                // The combo remains empty/editable until Sound is ported.
                 break;
+            case ptTextFileName: {
+                FILEENUMSTRUCT fileEnum;
+                fileEnum.pszTypes = "txt\0";
+                fileEnum.pfnAdd = AddTextFileToComboBox;
+                fileEnum.lParam = reinterpret_cast<qintptr>(combo);
+                fileEnum.bRecursive = TRUE;
+                EnumFiles(theApp.m_strBaseDir, &fileEnum);
+                break;
+            }
             default: {
                 UINT bit = 1;
                 const UINT keys = action->GetKeyParam(index);
@@ -2237,8 +2315,7 @@ BOOL CEditRule::bFillParamsFromRule(BOOL events, BOOL actions)
                 break;
             }
             }
-            if (type == ptServerName)
-                static_cast<CChatServiceComboBox*>(combo)->Fill();
+            if (type == ptServerName) m_cmbActionNetParam->Fill();
             SetActionParamText(index, m_rgstrActionParams[type],
                                m_prgdwActionParamFormatting[type]);
         }
@@ -2288,8 +2365,9 @@ BOOL CEditRule::bCorrectActionKeys()
         default:
             break;
         }
-        if (RTFParam(type, action->GetID())) continue;
-        const QString current = m_cmbActionParams[index]->currentText();
+        const BOOL rich = RTFParam(type, action->GetID());
+        const QString current = rich
+            ? QString() : m_cmbActionParams[index]->GetWindowText();
         m_cmbActionParams[index]->clear();
         UINT bit = 1;
         const UINT keys = action->GetKeyParam(index);
@@ -2300,7 +2378,7 @@ BOOL CEditRule::bCorrectActionKeys()
                         static_cast<enumKeyActionParam>(key)));
             bit <<= 1;
         }
-        m_cmbActionParams[index]->setEditText(current);
+        if (!rich) m_cmbActionParams[index]->SetWindowText(current);
     }
     return TRUE;
 }
@@ -2321,10 +2399,11 @@ void CEditRule::SaveComboParams(BOOL events, BOOL actions)
             m_rgstrActionParams[type] = ActionParamText(index);
             if (RTFParam(type, action->GetID())) {
                 FreeAndNullFormatting(&m_prgdwActionParamFormatting[type]);
+                CRtfCmbEdit* editor =
+                    m_cmbActionParams[index]->GetRtfCmbEdit();
+                if (!editor) continue;
                 m_prgdwActionParamFormatting[type] = PRGDWGetFormatting(
-                    m_rtfActionParams[index],
-                    m_rtfActionParams[index]->m_pFont,
-                    m_rtfActionParams[index]->m_crTextColor);
+                    editor, editor->m_pFont, editor->m_crTextColor);
             }
         }
     }
@@ -2427,6 +2506,65 @@ bool CEditRule::eventFilter(QObject* watched, QEvent* event)
     return QDialog::eventFilter(watched, event);
 }
 
+bool CEditRule::focusNextPrevChild(bool next)
+{
+    if (!m_pRule || !m_pRule->GetEvent() || !m_pRule->GetAction())
+        return QDialog::focusNextPrevChild(next);
+
+    QList<QWidget*> sourceOrder;
+    auto appendFocusable = [this, &sourceOrder](QWidget* widget) {
+        if (widget && widget->isVisibleTo(this) && widget->isEnabled()
+            && widget->focusPolicy() != Qt::NoFocus) {
+            sourceOrder.append(widget);
+        }
+    };
+
+    appendFocusable(m_cmbEvents);
+    for (UINT index = 0;
+         index < m_pRule->GetEvent()->GetParamNum(); ++index) {
+        appendFocusable(m_cmbEventParams[index]);
+    }
+    appendFocusable(m_btnAdvanced);
+    appendFocusable(m_cmbActions);
+    for (UINT index = 0;
+         index < m_pRule->GetAction()->GetParamNum(); ++index) {
+        const enumParamType type =
+            m_pRule->GetAction()->GetParamType(index);
+        if (type == ptServerName) {
+            appendFocusable(m_cmbActionNetParam);
+        } else if (m_cmbActionParams[index]->bGetRtfMode()) {
+            appendFocusable(m_cmbActionParams[index]->GetRtfCmbEdit());
+        } else {
+            appendFocusable(m_cmbActionParams[index]);
+        }
+    }
+    appendFocusable(m_spinDelay);
+    appendFocusable(m_chkSubRules);
+    appendFocusable(m_ok);
+    appendFocusable(m_cancel);
+    if (sourceOrder.isEmpty())
+        return QDialog::focusNextPrevChild(next);
+
+    QWidget* focused = QApplication::focusWidget();
+    INT current = -1;
+    for (INT index = 0; index < sourceOrder.size(); ++index) {
+        QWidget* candidate = sourceOrder.at(index);
+        if (focused == candidate
+            || (focused && candidate->isAncestorOf(focused))) {
+            current = index;
+            break;
+        }
+    }
+    if (current < 0) return QDialog::focusNextPrevChild(next);
+
+    const INT count = sourceOrder.size();
+    const INT targetIndex = next
+        ? (current + 1) % count : (current + count - 1) % count;
+    sourceOrder.at(targetIndex)->setFocus(
+        next ? Qt::TabFocusReason : Qt::BacktabFocusReason);
+    return true;
+}
+
 void CEditRule::accept()
 {
     if (!m_pRule || !m_pRule->GetEvent() || !m_pRule->GetAction()) return;
@@ -2509,10 +2647,11 @@ void CEditRule::accept()
             }
         }
         if (RTFParam(action->GetParamType(index), action->GetID())) {
+            CRtfCmbEdit* editor =
+                m_cmbActionParams[index]->GetRtfCmbEdit();
+            if (!editor) return;
             CDWordArray* formatting = PRGDWGetFormatting(
-                m_rtfActionParams[index],
-                m_rtfActionParams[index]->m_pFont,
-                m_rtfActionParams[index]->m_crTextColor);
+                editor, editor->m_pFont, editor->m_crTextColor);
             m_pRule->SetMsgFormatting(formatting, FALSE);
         }
     }

@@ -2,14 +2,95 @@
 
 #include "utils.h"
 
+#include <QDir>
 #include <QEvent>
+#include <QFileInfo>
 #include <QGuiApplication>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QRegularExpression>
 #include <QResizeEvent>
 #include <QScreen>
 
+#include <cstring>
 #include <limits>
+
+namespace {
+QStringList fileEnumTypes(const char* types)
+{
+    QStringList result;
+    for (const char* type = types; type && *type;
+         type += std::strlen(type) + 1) {
+        result.append(QString::fromLatin1(type));
+    }
+    return result;
+}
+
+QString sourceSubFilter(const char* subFilter)
+{
+    QString filter = subFilter
+        ? QString::fromLocal8Bit(subFilter).trimmed() : QString();
+    const qsizetype slash = qMax(filter.lastIndexOf(QLatin1Char('\\')),
+                                 filter.lastIndexOf(QLatin1Char('/')));
+    if (slash >= 0) filter = filter.mid(slash + 1);
+    if (filter.isEmpty()) return QStringLiteral("*.*");
+    if (!filter.contains(QLatin1Char('.'))) {
+        if (filter.endsWith(QLatin1Char('*')))
+            filter += QStringLiteral(".*");
+        else
+            filter += QStringLiteral("*.*");
+    }
+    return filter;
+}
+
+bool sourceFileNameMatches(const QString& fileName, const QString& filter)
+{
+    if (filter == QLatin1String("*.*")) return true;
+    const QRegularExpression expression(
+        QRegularExpression::wildcardToRegularExpression(filter),
+        QRegularExpression::CaseInsensitiveOption);
+    return expression.match(fileName).hasMatch();
+}
+
+void enumFilesInDirectory(const QDir& directory, FILEENUMSTRUCT* fileEnum,
+                          const QStringList& types, const QString& filter)
+{
+    const QDir::Filters common = QDir::Hidden | QDir::System
+        | QDir::NoDotAndDotDot;
+    const QFileInfoList files = directory.entryInfoList(
+        QDir::Files | common, QDir::NoSort);
+    for (const QFileInfo& file : files) {
+        if (!sourceFileNameMatches(file.fileName(), filter)) continue;
+        const QString suffix = file.suffix().toLower();
+        const int type = types.indexOf(suffix);
+        if (type < 0) continue;
+
+        QString fileName = file.completeBaseName();
+        if (!fileName.isEmpty()) fileName[0] = fileName.at(0).toUpper();
+        fileEnum->pfnAdd(fileEnum->lParam, directory.absolutePath(),
+                         fileName, type);
+    }
+
+    if (!fileEnum->bRecursive) return;
+    const QFileInfoList directories = directory.entryInfoList(
+        QDir::Dirs | common, QDir::NoSort);
+    for (const QFileInfo& child : directories) {
+        if (child.fileName().startsWith(QLatin1Char('.'))) continue;
+        enumFilesInDirectory(QDir(child.absoluteFilePath()), fileEnum,
+                             types, filter);
+    }
+}
+}
+
+void EnumFiles(const QString& path, FILEENUMSTRUCT* fileEnum)
+{
+    if (!fileEnum || !fileEnum->pszTypes || !fileEnum->pfnAdd) return;
+    const QDir directory(path);
+    if (!directory.exists()) return;
+    enumFilesInDirectory(
+        directory, fileEnum, fileEnumTypes(fileEnum->pszTypes),
+        sourceSubFilter(fileEnum->pszSubFilter));
+}
 
 void MakeRectVisibleOnScreen(QRect* rect)
 {

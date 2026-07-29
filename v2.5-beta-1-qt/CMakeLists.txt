@@ -85,6 +85,7 @@ set(COMIC_CHAT_PORT_SOURCES
     src/original/histent.cpp
     src/original/saywnd.cpp
     src/original/rtfctrl.cpp
+    src/original/rtfcmb.cpp
     src/original/doskey.cpp
     src/original/colordlg.cpp
     src/original/format.cpp
